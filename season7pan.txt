@@ -1,0 +1,53 @@
+Version 2
+THE DX CHALLENGE: SYSTEM ARCHITECTURE & MASTER PLAN
+1. 🎨 THEME & UI/UX (THE AMBER TERMINAL)
+The Aesthetic: High-signal, zero-noise. A sleek, technical terminal dropping the old espionage gimmicks. Deep warm black (#0d0a00) backgrounds with classic terminal amber (#ffb000) accents, entirely driven by the Fira Code monospace font.
+Accessible Terminology: Clean, standard DXing terms. "Log Entries" instead of "Intercept Reports," and "Leaderboard" instead of "Clandestine Matrix."
+Frictionless Navigation: A persistent sidebar managing Streamlit session state, utilizing modern st.pills for quick data filtering (e.g., toggling between "Current Week", "Current Season", and "All-Time").
+2. 🏗️ ARCHITECTURE & PERFORMANCE
+Tech Stack: Python, Streamlit, Pandas (data manipulation), Plotly (charts), PyDeck (maps), and Google Sheets (backend).
+The API Bypass: Instead of using slow row-by-row Google Sheets APIs, modules/data_forge.py will read the published sheet directly via pd.read_csv.
+Legacy Data Concatenation: Your 38,200 rows of historic data will live securely in the app's repository as a static, highly optimized CSV. Upon launch, the app pulls the live Season 7 sheet and instantly concatenates it with the legacy CSV in RAM. You get complete All-Time leaderboards without bloating your live database.
+Lightweight QTH Auth: Using streamlit_javascript, the app will read/write a DXer's basic profile (Name, Lat/Lon) to their browser's localStorage, allowing them to submit logs frictionlessly without a heavy login system.
+3. ⚙️ THE "FORM LOCKER" (challenge_rules.py)
+This is the brain of the operation. It replaces your manual website updates and form creations with a completely automated, UTC-driven state machine.
+Automated Epochs: You define the entire season's schedule in one Python array at the start of the year. The app compares datetime.now(timezone.utc) against your schedule to automatically swap active challenges exactly at 0200 UTC.
+Dynamic UI Restrictions: If the active MW challenge is the "910 kHz Sprint", the submission form locks the frequency field to 910. If a Tropo sprint opens, the FM band settings dynamically adjust while leaving the MW rules untouched.
+Concurrent Challenges: Season-long FM and NWR challenges run quietly in the background, untouched by the rotating weekly constraints of the MW band.
+4. 💾 THE DUAL-COUNTING DATA SCHEMA
+All incoming submissions funnel into one single Master Google Sheet. To support both weekly sprints and season-long marathons simultaneously, the app silently appends two hidden tags to every submission based on what was active at the time of entry:
+Season: (e.g., "Season 7")
+Challenge_Tag: (e.g., "Week 1 | 910 kHz" or "Season 7 | FM Marathon")
+This allows a single log to populate multiple leaderboards without duplicate entry. If someone logs an FM catch during a Tropo Sprint, modules/dashboard.py can slice the data to show who won the sprint (Challenge_Tag == "Tropo Sprint | FM"), while seamlessly adding that catch to their season-long totals (Season == "Season 7" & Band == "FM").
+5. 📂 MODULE MAP
+app.py: The switchboard. It handles the UI shell, injects the Amber CSS, manages the session state, and routes the user.
+challenge_rules.py: The centralized configuration file dictating active dates, targets, rules, and timeframe tags.
+modules/data_forge.py: The heavy lifter. Fetches the live Google Sheet, concatenates the 5 seasons of legacy CSV data, handles array caching, geocoding, and performs the 1-pt-per-100-miles distance math.
+modules/importers.py: The ingestion engine. Retains your Universal Auto-Detector logic to flawlessly parse, sanitize, and de-dupe bulk CSV uploads from WLogger and FMList against the master station arrays.
+modules/dashboard.py: The visualization engine. It applies aggressive Pandas pre-filtering to the dataframe before rendering the leaderboards, PyDeck maps, and user stats.
+📋 THE LAUNCH CHECKLIST (What You Need to Spin Up)
+Before we write the new code, you will need to provision these assets:
+New GitHub Repository: (e.g., dx-challenge-s7) to house the Amber Terminal code.
+New Streamlit App Deployment: Linked to the new repo.
+New Master Google Sheet: This will be your unified data lake. We will need to set up the exact column headers to match our new Season and Challenge_Tag architecture.
+Google Cloud Platform (GCP) Credentials: You will need to generate a new Service Account JSON for Streamlit Secrets to allow the app to write to the new Sheet.
+The Master Legacy CSV: We need to export your massive 38,200-row file (and the Summer of DX data) as one unified, cleaned CSV. We will upload this directly into the GitHub repo so data_forge.py can load it into RAM instantly for the All-Time leaderboards.
+🚀 THE DX CHALLENGE: SEASON 7 ARCHITECTURE PLAN
+1. THE "FORM LOCKER" ENGINE (challenge_rules.py)
+This file becomes a single Python dictionary containing every challenge you have planned for the year.
+The Logic: Every time a user opens the app, challenge_rules.py checks the current UTC time.
+The Action: It dynamically locks or unlocks the Streamlit entry forms based on what is active. If it is 0200 UTC on Saturday and a Tropo Sprint just started, the FM band form instantly reconfigures its allowed inputs without you having to touch a single line of code or build a new form.
+2. THE DUAL-TAGGING SUBMISSION PIPELINE (app.py)
+Instead of separate pages for MW, FM, and NWR, we consolidate the submission UI. The user simply selects their Band from an Amber Terminal st.pills toggle.
+When they hit "Transmit", the app invisibly tags the payload with two markers (e.g., Season="Season 7" and Challenge_Tag="Week 1 | 910 kHz").
+This data flows directly into the Master Google Sheet, meaning one log simultaneously updates the weekly sprint leaderboard and the season-long marathon leaderboard.
+3. THE IN-MEMORY DATA FORGE (modules/data_forge.py)
+This is where we achieve the speed you need.
+Upon boot, data_forge.py pulls the live Season 7 logs from the Google Sheet (using pd.read_csv on the published web link to bypass API limits).
+It immediately concatenates it with the 38,200-row static Master Legacy CSV stored in the repo.
+The result is a lightning-fast Pandas DataFrame containing every log ever recorded, sitting in RAM, ready to be sliced.
+4. THE AMBER TERMINAL DASHBOARD (modules/dashboard.py)
+The Cold War aesthetic is stripped out in favor of #0d0a00 backgrounds, #ffb000 accents, and the Fira Code font.
+Navigation: We use st.pills at the top of the dashboard to allow users to instantly toggle the active data slice: [ CURRENT WEEK ], [ PREVIOUS WEEK ], [ SEASON 7 OVERALL ], and [ ALL-TIME ].
+The Math: Because of the Dual-Tagging system, these pills simply trigger rapid Pandas filters on the master_df, instantly recalculating distance points
+
