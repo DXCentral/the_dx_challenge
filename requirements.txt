@@ -1,0 +1,10 @@
+streamlit
+pandas
+gspread
+google-auth
+streamlit-javascript
+geopy
+maidenhead
+plotly
+pydeck
+google-api-python-client
