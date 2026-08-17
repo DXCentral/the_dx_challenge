@@ -16,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed" 
 )
 
-# --- AMBER TERMINAL CSS ---
+# --- AMBER TERMINAL CSS (WITH TACTICAL RED PILLS) ---
 terminal_css = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap');
@@ -30,6 +30,7 @@ html, body, [class*="st-"] {
 [data-testid="collapsedControl"] { display: none !important; }
 section[data-testid="stSidebar"] { display: none !important; }
 
+/* GLOBAL PILL STYLING */
 div[data-testid="stPills"] button { 
     background-color: #1a1400 !important; 
     border: 1px solid #ffb000 !important; 
@@ -38,19 +39,22 @@ div[data-testid="stPills"] button {
     font-size: 1.1rem !important;
     padding: 10px 20px !important;
 }
+
+/* RED RING ACTIVE PILL OVERRIDE */
 div[data-testid="stPills"] button[data-checked="true"],
 div[data-testid="stPills"] button[aria-checked="true"],
 div[data-testid="stPills"] button[aria-pressed="true"] { 
-    background-color: #ffb000 !important; 
-    color: #0d0a00 !important; 
+    background-color: #3a0000 !important; 
+    border: 2px solid #ff0000 !important; 
+    color: #ffffff !important; 
     font-weight: bold !important;
+    box-shadow: 0px 0px 10px rgba(255,0,0,0.8) !important; 
 }
 </style>
 """
 st.markdown(terminal_css, unsafe_allow_html=True)
 
 # --- BACKGROUND TASKS (LOCAL STORAGE CACHE) ---
-# Silently saves the user's profile to their browser if triggered
 if "profile_to_save" in st.session_state:
     js_string = json.dumps(st.session_state.profile_to_save)
     components.html(
@@ -79,6 +83,7 @@ nav_selection = st.pills(
     "MAIN MENU", 
     ["[ HOME ]", "[ BANDSCAN GRID ]", "[ SUBMIT INTERCEPT ]", "[ LEADERBOARDS ]", "[ FORENSIC RADAR ]", "[ DIRECTIVES ]"], 
     default="[ HOME ]", 
+    selection_mode="single",
     label_visibility="collapsed",
     key="main_nav_pills"
 )
@@ -89,7 +94,6 @@ st.markdown("---")
 if nav_selection == "[ HOME ]":
     st.markdown("### 🔑 OPERATOR AUTHENTICATION & LOCATION")
     
-    # Attempt to load saved profile from browser cache
     js_get = "JSON.parse(localStorage.getItem('dx_central_operator'));"
     saved_data = st_javascript(js_get)
     
@@ -105,7 +109,7 @@ if nav_selection == "[ HOME ]":
     st.write("You must set your Home QTH coordinates to calculate intercept distances. Use the tools below to auto-locate.")
     
     st.markdown("#### 1. CALIBRATE LOCATION")
-    cal_mode = st.radio("Calibration Method", ["City/State Search", "Maidenhead Grid", "Manual Entry"], horizontal=True, label_visibility="collapsed")
+    cal_mode = st.pills("Calibration Method", ["City/State Search", "Maidenhead Grid", "Manual Entry"], default="City/State Search", selection_mode="single", label_visibility="collapsed")
     
     if cal_mode == "City/State Search":
         c_search, c_btn = st.columns([3, 1])
@@ -147,7 +151,6 @@ if nav_selection == "[ HOME ]":
         st.session_state.operator_lat = op_lat
         st.session_state.operator_lon = op_lon
         
-        # Trigger the browser cache save
         st.session_state.profile_to_save = {
             "name": st.session_state.operator_handle,
             "lat": st.session_state.operator_lat,
