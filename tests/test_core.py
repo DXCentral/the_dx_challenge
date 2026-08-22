@@ -4,7 +4,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
+
+from dxcore.content import frequency_allowed, load_challenges
 from dxcore.geo import grid_to_latlon, haversine_miles, latlon_to_grid
+from dxcore.metrics import add_geography_keys, canonical_daypart
 from dxcore.solar import mw_propagation
 from dxcore.stations import load_stations, stations_on_frequency
 from dxcore.store import LocalStore
@@ -22,6 +26,16 @@ class StationTests(unittest.TestCase):
         self.assertFalse(frame.empty)
         self.assertTrue(frame["distance_miles"].is_monotonic_increasing)
 
+    def test_bogalusa_nwr_uses_transmitter_parish(self) -> None:
+        frame = load_stations()
+        station = frame[
+            (frame["band"] == "NWR")
+            & (frame["call"] == "WNG521")
+            & ((frame["frequency"] - 162.525).abs() < 0.001)
+        ].iloc[0]
+        self.assertEqual(station["county"], "Washington")
+        self.assertEqual(station["region"], "LA")
+
 
 class GeographyTests(unittest.TestCase):
     def test_maidenhead_round_trip(self) -> None:
@@ -36,6 +50,25 @@ class GeographyTests(unittest.TestCase):
         nighttime = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
         self.assertEqual(mw_propagation(daytime, 30.36, -90.06), "Groundwave / Daytime")
         self.assertEqual(mw_propagation(nighttime, 30.36, -90.06), "Skywave / Nighttime")
+
+    def test_grid_and_county_awards_use_canonical_keys(self) -> None:
+        frame = add_geography_keys(
+            pd.DataFrame(
+                {
+                    "station_grid": ["EM40AB", "EM40CD", "EN50AA"],
+                    "station_region": ["LA", "LA", "IL"],
+                    "station_county": ["Washington Parish", "Washington", "Washington County"],
+                }
+            )
+        )
+        self.assertEqual(frame["grid4"].nunique(), 2)
+        self.assertEqual(frame["county_key"].nunique(), 2)
+        self.assertEqual(canonical_daypart("Groundwave / Daytime"), "Daytime")
+
+    def test_file_driven_challenge_schedule(self) -> None:
+        challenge = next(item for item in load_challenges() if item["id"] == "week_1_910_sprint")
+        self.assertTrue(frequency_allowed(challenge["rules"]["frequencies"], 910.0))
+        self.assertFalse(frequency_allowed(challenge["rules"]["frequencies"], 920.0))
 
 
 class StoreTests(unittest.TestCase):
@@ -126,6 +159,19 @@ class StoreTests(unittest.TestCase):
         deleted, message = self.store.delete_location(self.user_id, self.location_id)
         self.assertFalse(deleted)
         self.assertIn("locked", message)
+
+    def test_custom_display_name_survives_google_identity_refresh(self) -> None:
+        self.store.update_user_preferences(
+            self.user_id,
+            display_name="Robert",
+            theme_name="High contrast",
+            walkthrough_complete=True,
+        )
+        self.store.upsert_user(self.user_id, self.user_id, "Google Account Name")
+        profile = self.store.user_profile(self.user_id)
+        self.assertEqual(profile["display_name"], "Robert")
+        self.assertEqual(profile["theme_name"], "High contrast")
+        self.assertEqual(profile["walkthrough_complete"], 1)
 
 
 if __name__ == "__main__":
