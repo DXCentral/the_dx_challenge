@@ -13,6 +13,7 @@ from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.metrics import canonical_daypart
 from dxcore.solar import mw_propagation
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, stations_on_frequency
+from modules.import_console import render_import_console
 
 
 PROPAGATION = {
@@ -52,6 +53,11 @@ def manual_station_id(band: str, frequency: float, call: str, city: str, region:
     return f"manual_{hashlib.sha1(raw.encode()).hexdigest()[:16]}"
 
 
+def clear_station_filters(band: str) -> None:
+    version_key = f"station_filter_version_{band}"
+    st.session_state[version_key] = int(st.session_state.get(version_key, 0)) + 1
+
+
 st.title("Log entry")
 st.caption("Select a station, review the complete reception, then submit. Nothing is logged by a row click alone.")
 
@@ -63,6 +69,17 @@ band_options = {"key": "log_band", "persist_state": "session"}
 if "log_band" not in st.session_state:
     band_options["default"] = "FM"
 band = st.segmented_control("Band", ["MW", "FM", "NWR"], **band_options)
+entry_mode = st.segmented_control(
+    "Entry method",
+    ["Station list", "Manual entry", "Bulk import"],
+    default="Station list",
+    key="log_entry_method",
+)
+
+if entry_mode == "Bulk import":
+    render_import_console(location)
+    st.stop()
+
 completed, total, ratio = bandscan_progress(str(location["location_id"]), band)
 if ratio < 1:
     st.warning(
@@ -114,22 +131,6 @@ with st.container(horizontal=True, vertical_alignment="bottom"):
     )
     st.button("Next", icon=":material/skip_next:", on_click=move_channel, args=(1,))
 
-entry_mode = st.segmented_control(
-    "Entry method", ["Station list", "Manual entry", "Bulk import"], default="Station list", key="log_entry_method"
-)
-
-if entry_mode == "Bulk import":
-    st.info(
-        "The importer review screen is the next build checkpoint. It will not write directly: every row will be classified as Ready, Proposed repair, Ambiguous, Duplicate, or Invalid.",
-        icon=":material/upload_file:",
-    )
-    uploaded = st.file_uploader("Upload a CSV for schema detection", type=["csv"])
-    if uploaded is not None:
-        preview = pd.read_csv(uploaded, dtype=str, nrows=25).fillna("")
-        st.success(f"Read {len(preview.columns)} columns. This preview remains in memory and has not been imported.")
-        st.dataframe(preview, hide_index=True)
-    st.stop()
-
 selected: dict[str, object] | None = None
 source = "station_list"
 
@@ -174,16 +175,24 @@ if entry_mode == "Station list":
         st.info("No stations match this frequency and distance range. Expand the range or use Manual entry.")
         st.stop()
     matches = matches.copy()
+    station_filter_version = int(st.session_state.get(f"station_filter_version_{band}", 0))
     with st.popover("Filter station list", icon=":material/filter_alt:"):
         filter_columns = st.columns(2)
-        call_filter = filter_columns[0].text_input("Call sign / station name", key=f"station_call_{band}")
-        city_filter = filter_columns[1].text_input("City", key=f"station_city_{band}")
+        call_filter = filter_columns[0].text_input("Call sign / station name", key=f"station_call_{band}_{station_filter_version}")
+        city_filter = filter_columns[1].text_input("City", key=f"station_city_{band}_{station_filter_version}")
         filter_columns = st.columns(2)
-        region_filter = filter_columns[0].text_input("State / province", key=f"station_region_{band}")
-        country_filter = filter_columns[1].text_input("Country", key=f"station_country_{band}")
+        region_filter = filter_columns[0].text_input("State / province", key=f"station_region_{band}_{station_filter_version}")
+        country_filter = filter_columns[1].text_input("Country", key=f"station_country_{band}_{station_filter_version}")
         filter_columns = st.columns(2)
-        county_filter = filter_columns[0].text_input("County / parish", key=f"station_county_{band}")
-        grid_filter = filter_columns[1].text_input("Grid", key=f"station_grid_{band}")
+        county_filter = filter_columns[0].text_input("County / parish", key=f"station_county_{band}_{station_filter_version}")
+        grid_filter = filter_columns[1].text_input("Grid", key=f"station_grid_{band}_{station_filter_version}")
+        st.button(
+            "Clear filters",
+            icon=":material/filter_alt_off:",
+            on_click=clear_station_filters,
+            args=(band,),
+            key=f"clear_station_filters_{band}",
+        )
 
     for column, query in [
         ("call", call_filter),

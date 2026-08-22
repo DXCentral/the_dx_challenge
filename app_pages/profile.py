@@ -32,7 +32,7 @@ with st.container(border=True):
             "Display name",
             value=str(user["display_name"]),
             max_chars=80,
-            help="This name appears in leaderboards, awards, challenges, and community views. It does not change your Google account.",
+        help="This name appears in leaderboards, awards, challenges, and community views. It does not change your Google account.",
         )
         st.caption(user["email"])
         save_name = st.form_submit_button(
@@ -42,7 +42,9 @@ with st.container(border=True):
         try:
             store.update_user_preferences(user["user_id"], display_name=display_name)
             st.session_state.user["display_name"] = display_name.strip()
-            st.session_state.profile_notice = "Display name updated throughout the app."
+            st.session_state.profile_notice = (
+                "Display name updated for this account and all of its historical results."
+            )
             st.rerun()
         except ValueError as error:
             st.error(str(error))
@@ -50,6 +52,10 @@ with st.container(border=True):
         "Google-authenticated account" if authentication_configured() else "Local test identity",
         icon=":material/verified_user:" if authentication_configured() else ":material/science:",
         color="blue",
+    )
+    st.caption(
+        "Reception ownership uses your stable signed-in account ID, not a copied name. "
+        "Changing this value therefore updates historical leaderboards and awards without creating a second DXer."
     )
 
 with st.container(border=True):

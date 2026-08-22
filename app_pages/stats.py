@@ -99,10 +99,18 @@ def density_color(value: int, maximum: int) -> list[int]:
 
 def clear_filters() -> None:
     for key in [
-        "stats_bands", "stats_propagation", "stats_dxer", "stats_frequency",
-        "stats_region", "stats_country", "stats_grid", "stats_county",
+        "stats_pending_region", "stats_pending_country", "stats_pending_grid",
+        "stats_pending_county",
     ]:
         st.session_state.pop(key, None)
+    # A selected map feature is a stateful frontend input. Remount the map
+    # components so that selection cannot immediately reapply a cleared filter.
+    st.session_state.stats_map_selection_version = (
+        int(st.session_state.get("stats_map_selection_version", 0)) + 1
+    )
+    st.session_state.stats_filter_version = (
+        int(st.session_state.get("stats_filter_version", 0)) + 1
+    )
 
 
 st.title("Stats")
@@ -116,6 +124,12 @@ if logs.empty:
 
 name_lookup = display_names()
 user_id = st.session_state.user["user_id"]
+selection_version = int(st.session_state.get("stats_map_selection_version", 0))
+filter_version = int(st.session_state.get("stats_filter_version", 0))
+filter_keys = {
+    field: f"stats_{field}_{filter_version}"
+    for field in ["bands", "propagation", "dxer", "frequency", "region", "country", "grid", "county"]
+}
 regions = sorted(value for value in logs["station_region"].unique() if value)
 countries = sorted(value for value in logs["station_country"].unique() if value)
 grids = sorted(value for value in logs["grid4"].unique() if value)
@@ -128,10 +142,10 @@ county_labels = (
 )
 
 for pending_key, widget_key, valid in [
-    ("stats_pending_region", "stats_region", set(regions)),
-    ("stats_pending_country", "stats_country", set(countries)),
-    ("stats_pending_grid", "stats_grid", set(grids)),
-    ("stats_pending_county", "stats_county", set(county_labels)),
+    ("stats_pending_region", filter_keys["region"], set(regions)),
+    ("stats_pending_country", filter_keys["country"], set(countries)),
+    ("stats_pending_grid", filter_keys["grid"], set(grids)),
+    ("stats_pending_county", filter_keys["county"], set(county_labels)),
 ]:
     pending = st.session_state.pop(pending_key, None)
     if pending in valid:
@@ -143,17 +157,17 @@ with st.container(border=True):
     all_bands = sorted(logs["band"].unique())
     all_propagation = sorted(logs["propagation"].unique())
     bands = first[0].multiselect(
-        "Band", all_bands, default=all_bands, key="stats_bands"
+        "Band", all_bands, default=all_bands, key=filter_keys["bands"]
     )
     propagation = first[1].multiselect(
-        "Propagation", all_propagation, default=all_propagation, key="stats_propagation"
+        "Propagation", all_propagation, default=all_propagation, key=filter_keys["propagation"]
     )
     other_dxers = [value for value in sorted(logs["user_id"].unique()) if value != user_id]
     dxer_options = ["__MY__", "__ALL__", *other_dxers]
     dxer_choice = first[2].selectbox(
         "DXer",
         dxer_options,
-        key="stats_dxer",
+        key=filter_keys["dxer"],
         format_func=lambda value: {
             "__MY__": "My logs",
             "__ALL__": "All DXers",
@@ -163,27 +177,31 @@ with st.container(border=True):
     frequency_choice = first[3].selectbox(
         "Frequency",
         frequency_options,
-        key="stats_frequency",
+        key=filter_keys["frequency"],
         format_func=lambda value: "All" if value == "All" else f"{float(value):g}",
     )
     second = st.columns(4)
     region_choice = second[0].selectbox(
-        "State / province", ["All", *regions], key="stats_region"
+        "State / province", ["All", *regions], key=filter_keys["region"]
     )
     country_choice = second[1].selectbox(
-        "Country", ["All", *countries], key="stats_country"
+        "Country", ["All", *countries], key=filter_keys["country"]
     )
     grid_choice = second[2].selectbox(
-        "4-character grid", ["All", *grids], key="stats_grid"
+        "4-character grid", ["All", *grids], key=filter_keys["grid"]
     )
     county_choice = second[3].selectbox(
         "County / parish",
         ["All", *county_labels],
-        key="stats_county",
+        key=filter_keys["county"],
         format_func=lambda value: "All" if value == "All" else county_labels.get(value, value),
     )
 
-st.button("Clear filters", icon=":material/filter_alt_off:", on_click=clear_filters)
+st.button(
+    "Clear filters",
+    icon=":material/filter_alt_off:",
+    on_click=clear_filters,
+)
 
 filtered = logs[logs["band"].isin(bands) & logs["propagation"].isin(propagation)].copy()
 if dxer_choice == "__MY__":
@@ -291,10 +309,13 @@ elif map_view == "Logs by state / province":
             .properties(height=460, background=background)
         )
         event = st.altair_chart(
-            chart, key="stats_state_map", on_select="rerun", selection_mode="state_pick"
+            chart,
+            key=f"stats_state_map_{selection_version}",
+            on_select="rerun",
+            selection_mode="state_pick",
         )
         if picked := selection_value(event, "state_pick", "region"):
-            if picked != st.session_state.get("stats_region"):
+            if picked != region_choice:
                 st.session_state.stats_pending_region = picked
                 st.rerun()
 elif map_view == "Logs by country":
@@ -349,7 +370,7 @@ elif map_view == "Logs by country":
         )
         event = st.plotly_chart(
             fig,
-            key="stats_country_plotly",
+            key=f"stats_country_plotly_{selection_version}",
             on_select="rerun",
             selection_mode="points",
             config={
@@ -359,7 +380,7 @@ elif map_view == "Logs by country":
             },
         )
         if picked := plotly_point(event, "location"):
-            if picked in countries and picked != st.session_state.get("stats_country"):
+            if picked in countries and picked != country_choice:
                 st.session_state.stats_pending_country = picked
                 st.rerun()
 elif map_view == "Logs by grid square":
@@ -412,7 +433,7 @@ elif map_view == "Logs by grid square":
                 tooltip={"text": "Grid {grid4}\n{Unique stations} unique stations"},
                 map_style=None,
             ),
-            key="stats_grid_map",
+            key=f"stats_grid_map_{selection_version}",
             on_select="rerun",
         )
         try:
@@ -421,7 +442,7 @@ elif map_view == "Logs by grid square":
             selected = []
         if selected:
             picked = str(selected[0].get("grid4", ""))
-            if picked in grids and picked != st.session_state.get("stats_grid"):
+            if picked in grids and picked != grid_choice:
                 st.session_state.stats_pending_grid = picked
                 st.rerun()
 elif map_view == "Logs by county":
@@ -487,7 +508,7 @@ elif map_view == "Logs by county":
                 },
                 map_style=None,
             ),
-            key="stats_county_map",
+            key=f"stats_county_map_{selection_version}",
             on_select="rerun",
         )
         try:
@@ -502,7 +523,10 @@ elif map_view == "Logs by county":
             if not match.empty:
                 county_key = str(match.iloc[0]["county_key"])
                 region = str(match.iloc[0]["state"])
-                if county_key in county_labels:
+                already_applied = (
+                    county_key == county_choice and region == region_choice
+                )
+                if county_key in county_labels and not already_applied:
                     st.session_state.stats_pending_region = region
                     st.session_state.stats_pending_county = county_key
                     st.rerun()

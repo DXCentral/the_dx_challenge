@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app_support import bandscan_progress, get_store, require_location
+from dxcore.config import BANDSCAN_STATION_MINIMUMS
 from dxcore.stations import frequencies_for_band, stations_on_frequency
 
 
@@ -30,9 +31,12 @@ frequencies = frequencies_for_band(band, mw_spacing)
 scan = store.bandscan(user_id, str(location["location_id"]), band)
 records = {round(float(row["frequency"]), 3): row for row in scan.to_dict("records")}
 completed, total, ratio = bandscan_progress(str(location["location_id"]), band, mw_spacing)
+station_count = int((scan["status"] == "STATION").sum()) if not scan.empty else 0
+station_minimum = BANDSCAN_STATION_MINIMUMS[band]
 
 with st.container(horizontal=True):
     st.metric(f"{band} readiness", f"{completed} / {total}", border=True)
+    st.metric("Stations confirmed", f"{station_count} / {station_minimum}", border=True)
     st.metric("Status", "Unlocked" if ratio == 1 else "In progress", border=True)
 st.progress(ratio, text=f"{ratio:.0%} reviewed at {location['label']}")
 
@@ -40,6 +44,12 @@ st.progress(ratio, text=f"{ratio:.0%} reviewed at {location['label']}")
 @st.dialog("Mark remaining frequencies OPEN")
 def confirm_fill_open() -> None:
     remaining = total - completed
+    if station_count < station_minimum:
+        st.error(
+            f"Confirm at least {station_minimum} actual {band} station"
+            f"{'s' if station_minimum != 1 else ''} before using the bulk OPEN helper."
+        )
+        return
     st.warning(
         f"Mark all {remaining:,} unreviewed {band} frequencies OPEN at {location['label']}?"
     )
@@ -55,9 +65,15 @@ def confirm_fill_open() -> None:
 if st.button(
     "Mark all other frequencies OPEN",
     icon=":material/done_all:",
-    disabled=completed >= total,
+    disabled=completed >= total or station_count < station_minimum,
 ):
     confirm_fill_open()
+if completed < total and station_count < station_minimum:
+    st.caption(
+        f"Bulk OPEN unlocks after {station_minimum} actual {band} station"
+        f"{'s are' if station_minimum != 1 else ' is'} confirmed "
+        f"({station_count}/{station_minimum}). Individual channels can always be reviewed manually."
+    )
 
 style_rules = []
 for frequency in frequencies:

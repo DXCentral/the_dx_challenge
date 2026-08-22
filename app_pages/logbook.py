@@ -4,6 +4,13 @@ import pandas as pd
 import streamlit as st
 
 from app_support import get_store
+from dxcore.metrics import add_geography_keys
+
+
+def clear_logbook_filters() -> None:
+    st.session_state.logbook_filter_version = (
+        int(st.session_state.get("logbook_filter_version", 0)) + 1
+    )
 
 
 st.title("My logbook")
@@ -16,8 +23,88 @@ if logs.empty:
     st.info("No receptions have been submitted in local test mode.")
     st.stop()
 
-bands = st.multiselect("Band", sorted(logs["band"].unique()), default=sorted(logs["band"].unique()))
-filtered = logs[logs["band"].isin(bands)].copy()
+logs = add_geography_keys(logs)
+regions = sorted(value for value in logs["station_region"].astype(str).unique() if value)
+countries = sorted(value for value in logs["station_country"].astype(str).unique() if value)
+grids = sorted(value for value in logs["grid4"].astype(str).unique() if value)
+county_labels = (
+    logs[logs["county_key"] != ""]
+    .drop_duplicates("county_key")
+    .set_index("county_key")
+    .apply(lambda row: f"{row['station_county']}, {row['station_region']}", axis=1)
+    .to_dict()
+)
+filter_version = int(st.session_state.get("logbook_filter_version", 0))
+filter_keys = {
+    field: f"logbook_{field}_{filter_version}"
+    for field in ["bands", "propagation", "frequency", "source", "region", "country", "grid", "county"]
+}
+
+with st.container(border=True):
+    st.markdown("**Filters**")
+    st.caption("DXer scope is fixed to My logs on this page.")
+    first = st.columns(4)
+    all_bands = sorted(logs["band"].astype(str).unique())
+    all_propagation = sorted(logs["propagation"].astype(str).unique())
+    bands = first[0].multiselect(
+        "Band", all_bands, default=all_bands, key=filter_keys["bands"]
+    )
+    propagation = first[1].multiselect(
+        "Propagation",
+        all_propagation,
+        default=all_propagation,
+        key=filter_keys["propagation"],
+    )
+    frequency_choice = first[2].selectbox(
+        "Frequency",
+        ["All", *sorted(logs["frequency"].astype(float).unique())],
+        key=filter_keys["frequency"],
+        format_func=lambda value: "All" if value == "All" else f"{float(value):g}",
+    )
+    source_choice = first[3].selectbox(
+        "Source",
+        ["All", *sorted(logs["source"].astype(str).unique())],
+        key=filter_keys["source"],
+    )
+    second = st.columns(4)
+    region_choice = second[0].selectbox(
+        "State / province", ["All", *regions], key=filter_keys["region"]
+    )
+    country_choice = second[1].selectbox(
+        "Country", ["All", *countries], key=filter_keys["country"]
+    )
+    grid_choice = second[2].selectbox(
+        "4-character grid", ["All", *grids], key=filter_keys["grid"]
+    )
+    county_choice = second[3].selectbox(
+        "County / parish",
+        ["All", *county_labels],
+        key=filter_keys["county"],
+        format_func=lambda value: "All" if value == "All" else county_labels.get(value, value),
+    )
+
+st.button(
+    "Clear filters",
+    icon=":material/filter_alt_off:",
+    on_click=clear_logbook_filters,
+)
+
+filtered = logs[
+    logs["band"].isin(bands) & logs["propagation"].isin(propagation)
+].copy()
+for column, choice in [
+    ("frequency", frequency_choice),
+    ("source", source_choice),
+    ("station_region", region_choice),
+    ("station_country", country_choice),
+    ("grid4", grid_choice),
+    ("county_key", county_choice),
+]:
+    if choice != "All":
+        if column == "frequency":
+            filtered = filtered[(filtered[column].astype(float) - float(choice)).abs() < 0.001]
+        else:
+            filtered = filtered[filtered[column].astype(str) == str(choice)]
 safe_columns = [
     "reception_utc",
     "band",
@@ -47,6 +134,9 @@ with st.container(horizontal=True):
         mime="text/csv",
         icon=":material/download:",
     )
+
+if filtered.empty:
+    st.warning("No receptions match these filters.")
 
 action_slot = st.container()
 event = st.dataframe(
