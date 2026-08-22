@@ -1,0 +1,445 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Iterator
+
+import pandas as pd
+
+from dxcore.config import LOCAL_DB_PATH
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def iso_utc(value: datetime | None = None) -> str:
+    return (value or utc_now()).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+class LocalStore:
+    """SQLite-backed development adapter. It never connects to Google."""
+
+    def __init__(self, path: Path = LOCAL_DB_PATH) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.ensure_schema()
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self.path, timeout=15)
+        connection.row_factory = sqlite3.Row
+        try:
+            yield connection
+            connection.commit()
+        finally:
+            connection.close()
+
+    def ensure_schema(self) -> None:
+        with self.connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS locations (
+                    location_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    country TEXT NOT NULL,
+                    grid TEXT NOT NULL,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    is_home INTEGER NOT NULL DEFAULT 0,
+                    created_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_locations_user ON locations(user_id);
+                CREATE TABLE IF NOT EXISTS logs (
+                    log_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    location_id TEXT NOT NULL,
+                    station_id TEXT NOT NULL,
+                    band TEXT NOT NULL,
+                    frequency REAL NOT NULL,
+                    call TEXT NOT NULL,
+                    station_city TEXT NOT NULL,
+                    station_region TEXT NOT NULL,
+                    station_country TEXT NOT NULL,
+                    station_county TEXT NOT NULL,
+                    station_grid TEXT NOT NULL,
+                    station_latitude REAL,
+                    station_longitude REAL,
+                    reception_utc TEXT NOT NULL,
+                    distance_miles REAL,
+                    propagation TEXT NOT NULL,
+                    is_sdr INTEGER NOT NULL DEFAULT 0,
+                    is_portable INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    import_batch_id TEXT NOT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL DEFAULT '',
+                    deleted_utc TEXT NOT NULL DEFAULT '',
+                    revision INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_logs_owner_time ON logs(user_id, reception_utc);
+                CREATE INDEX IF NOT EXISTS idx_logs_unique_station ON logs(user_id, station_id);
+                CREATE TABLE IF NOT EXISTS bandscan (
+                    bandscan_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    location_id TEXT NOT NULL,
+                    band TEXT NOT NULL,
+                    frequency REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    station_id TEXT NOT NULL,
+                    call TEXT NOT NULL,
+                    reviewed_utc TEXT NOT NULL,
+                    UNIQUE(user_id, location_id, band, frequency)
+                );
+                CREATE TABLE IF NOT EXISTS announcements (
+                    announcement_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    published_utc TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1
+                );
+                """
+            )
+            existing_log_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(logs)").fetchall()
+            }
+            for column, definition in {
+                "updated_utc": "TEXT NOT NULL DEFAULT ''",
+                "deleted_utc": "TEXT NOT NULL DEFAULT ''",
+                "revision": "INTEGER NOT NULL DEFAULT 1",
+            }.items():
+                if column not in existing_log_columns:
+                    connection.execute(f"ALTER TABLE logs ADD COLUMN {column} {definition}")
+            legacy_nwr_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT station_id FROM logs WHERE band='NWR' AND deleted_utc='' AND station_county<>''"
+                ).fetchall()
+            ]
+            if legacy_nwr_ids:
+                from dxcore.stations import load_stations
+
+                nwr = load_stations()
+                canonical_counties = nwr[nwr["band"] == "NWR"].set_index("station_id")["county"].to_dict()
+                connection.executemany(
+                    "UPDATE logs SET station_county=? WHERE band='NWR' AND station_id=?",
+                    [(canonical_counties.get(station_id, ""), station_id) for station_id in legacy_nwr_ids],
+                )
+            count = connection.execute("SELECT COUNT(*) FROM announcements").fetchone()[0]
+            if count == 0:
+                connection.execute(
+                    "INSERT INTO announcements VALUES (?, ?, ?, ?, 1)",
+                    (
+                        "welcome-s7",
+                        "Season 7 staging is underway",
+                        "Complete a band baseline, then use the reviewed log-entry workflow. Test data stays local until Google writes are explicitly enabled.",
+                        iso_utc(),
+                    ),
+                )
+
+    def upsert_user(self, user_id: str, email: str, display_name: str) -> None:
+        now = iso_utc()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO users(user_id, email, display_name, created_utc, updated_utc)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    email=excluded.email,
+                    display_name=excluded.display_name,
+                    updated_utc=excluded.updated_utc
+                """,
+                (user_id, email, display_name, now, now),
+            )
+
+    def add_location(self, user_id: str, values: dict[str, object]) -> str:
+        location_id = f"qth_{uuid.uuid4().hex[:16]}"
+        is_home = bool(values.get("is_home"))
+        with self.connect() as connection:
+            if is_home:
+                connection.execute("UPDATE locations SET is_home=0 WHERE user_id=?", (user_id,))
+            connection.execute(
+                """
+                INSERT INTO locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    location_id,
+                    user_id,
+                    str(values.get("label", "New QTH")),
+                    str(values.get("city", "")),
+                    str(values.get("region", "")),
+                    str(values.get("country", "")),
+                    str(values.get("grid", "")),
+                    float(values["latitude"]),
+                    float(values["longitude"]),
+                    int(is_home),
+                    iso_utc(),
+                ),
+            )
+        return location_id
+
+    def set_home_location(self, user_id: str, location_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute("UPDATE locations SET is_home=0 WHERE user_id=?", (user_id,))
+            result = connection.execute(
+                "UPDATE locations SET is_home=1 WHERE user_id=? AND location_id=?", (user_id, location_id)
+            )
+            if result.rowcount != 1:
+                raise ValueError("Location does not belong to the signed-in user.")
+
+    def locations(self, user_id: str) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT * FROM locations WHERE user_id=? ORDER BY is_home DESC, created_utc", connection, params=(user_id,)
+            )
+
+    def location_usage(self, user_id: str, location_id: str) -> dict[str, int]:
+        with self.connect() as connection:
+            logs = connection.execute(
+                "SELECT COUNT(*) FROM logs WHERE user_id=? AND location_id=? AND deleted_utc=''",
+                (user_id, location_id),
+            ).fetchone()[0]
+            bandscan = connection.execute(
+                "SELECT COUNT(*) FROM bandscan WHERE user_id=? AND location_id=?",
+                (user_id, location_id),
+            ).fetchone()[0]
+        return {"logs": int(logs), "bandscan": int(bandscan)}
+
+    def delete_location(self, user_id: str, location_id: str) -> tuple[bool, str]:
+        with self.connect() as connection:
+            location = connection.execute(
+                "SELECT is_home FROM locations WHERE user_id=? AND location_id=?",
+                (user_id, location_id),
+            ).fetchone()
+            if location is None:
+                return False, "Location does not belong to the signed-in user."
+            log_count = connection.execute(
+                "SELECT COUNT(*) FROM logs WHERE user_id=? AND location_id=? AND deleted_utc=''",
+                (user_id, location_id),
+            ).fetchone()[0]
+            if log_count:
+                return False, f"This location is locked because {log_count:,} active log(s) use it."
+            scan_count = connection.execute(
+                "SELECT COUNT(*) FROM bandscan WHERE user_id=? AND location_id=?",
+                (user_id, location_id),
+            ).fetchone()[0]
+            if scan_count:
+                return False, f"This location is locked because {scan_count:,} bandscan result(s) use it."
+            if location["is_home"]:
+                alternatives = connection.execute(
+                    "SELECT COUNT(*) FROM locations WHERE user_id=? AND location_id<>?",
+                    (user_id, location_id),
+                ).fetchone()[0]
+                if alternatives:
+                    return False, "Choose another Home QTH before deleting this one."
+            connection.execute(
+                "DELETE FROM locations WHERE user_id=? AND location_id=?", (user_id, location_id)
+            )
+        return True, "Location deleted."
+
+    def save_bandscan(
+        self,
+        user_id: str,
+        location_id: str,
+        band: str,
+        frequency: float,
+        status: str,
+        station_id: str = "",
+        call: str = "",
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO bandscan VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, location_id, band, frequency) DO UPDATE SET
+                    status=excluded.status,
+                    station_id=excluded.station_id,
+                    call=excluded.call,
+                    reviewed_utc=excluded.reviewed_utc
+                """,
+                (
+                    f"scan_{uuid.uuid4().hex[:16]}",
+                    user_id,
+                    location_id,
+                    band,
+                    float(frequency),
+                    status,
+                    station_id,
+                    call,
+                    iso_utc(),
+                ),
+            )
+
+    def fill_bandscan_open(
+        self, user_id: str, location_id: str, band: str, frequencies: list[float]
+    ) -> None:
+        now = iso_utc()
+        with self.connect() as connection:
+            for frequency in frequencies:
+                connection.execute(
+                    """
+                    INSERT INTO bandscan VALUES (?, ?, ?, ?, ?, 'OPEN', '', 'OPEN', ?)
+                    ON CONFLICT(user_id, location_id, band, frequency) DO NOTHING
+                    """,
+                    (
+                        f"scan_{uuid.uuid4().hex[:16]}",
+                        user_id,
+                        location_id,
+                        band,
+                        float(frequency),
+                        now,
+                    ),
+                )
+
+    def bandscan(self, user_id: str, location_id: str, band: str) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT * FROM bandscan WHERE user_id=? AND location_id=? AND band=? ORDER BY frequency",
+                connection,
+                params=(user_id, location_id, band),
+            )
+
+    def append_log(self, values: dict[str, object]) -> tuple[bool, str]:
+        reception = datetime.fromisoformat(str(values["reception_utc"]).replace("Z", "+00:00"))
+        if reception.tzinfo is None:
+            reception = reception.replace(tzinfo=timezone.utc)
+        lower = iso_utc(reception - timedelta(minutes=5))
+        upper = iso_utc(reception + timedelta(minutes=5))
+        with self.connect() as connection:
+            duplicate = connection.execute(
+                """
+                SELECT log_id, reception_utc FROM logs
+                WHERE user_id=? AND location_id=? AND station_id=?
+                  AND deleted_utc=''
+                  AND reception_utc BETWEEN ? AND ?
+                ORDER BY reception_utc LIMIT 1
+                """,
+                (
+                    values["user_id"],
+                    values["location_id"],
+                    values["station_id"],
+                    lower,
+                    upper,
+                ),
+            ).fetchone()
+            if duplicate:
+                return False, f"Already logged within five minutes ({duplicate['reception_utc']})."
+
+            log_id = f"log_{uuid.uuid4().hex[:20]}"
+            columns = [
+                "log_id", "user_id", "location_id", "station_id", "band", "frequency", "call",
+                "station_city", "station_region", "station_country", "station_county", "station_grid",
+                "station_latitude", "station_longitude", "reception_utc", "distance_miles", "propagation",
+                "is_sdr", "is_portable", "notes", "source", "import_batch_id", "created_utc",
+                "updated_utc", "deleted_utc", "revision",
+            ]
+            payload = {
+                "log_id": log_id,
+                "created_utc": iso_utc(),
+                "updated_utc": iso_utc(),
+                "deleted_utc": "",
+                "revision": 1,
+                "import_batch_id": "",
+                "notes": "",
+                "source": "manual",
+                "is_sdr": 0,
+                "is_portable": 0,
+                **values,
+                "reception_utc": iso_utc(reception),
+            }
+            connection.execute(
+                f"INSERT INTO logs({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                tuple(payload.get(column, "") for column in columns),
+            )
+        return True, log_id
+
+    def update_log(self, user_id: str, log_id: str, values: dict[str, object]) -> tuple[bool, str]:
+        allowed = {
+            "reception_utc", "propagation", "is_sdr", "is_portable", "notes",
+        }
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if not updates:
+            return False, "No editable fields were supplied."
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM logs WHERE user_id=? AND log_id=? AND deleted_utc=''",
+                (user_id, log_id),
+            ).fetchone()
+            if existing is None:
+                return False, "Reception was not found or does not belong to the signed-in user."
+            reception = datetime.fromisoformat(
+                str(updates.get("reception_utc", existing["reception_utc"])).replace("Z", "+00:00")
+            )
+            if reception.tzinfo is None:
+                reception = reception.replace(tzinfo=timezone.utc)
+            reception_iso = iso_utc(reception)
+            duplicate = connection.execute(
+                """
+                SELECT log_id, reception_utc FROM logs
+                WHERE user_id=? AND location_id=? AND station_id=?
+                  AND log_id<>? AND deleted_utc=''
+                  AND reception_utc BETWEEN ? AND ?
+                ORDER BY reception_utc LIMIT 1
+                """,
+                (
+                    user_id,
+                    existing["location_id"],
+                    existing["station_id"],
+                    log_id,
+                    iso_utc(reception - timedelta(minutes=5)),
+                    iso_utc(reception + timedelta(minutes=5)),
+                ),
+            ).fetchone()
+            if duplicate:
+                return False, f"That change would duplicate a log within five minutes ({duplicate['reception_utc']})."
+            updates["reception_utc"] = reception_iso
+            updates["updated_utc"] = iso_utc()
+            assignments = ", ".join(f"{column}=?" for column in updates)
+            connection.execute(
+                f"UPDATE logs SET {assignments}, revision=revision+1 WHERE user_id=? AND log_id=?",
+                (*updates.values(), user_id, log_id),
+            )
+        return True, "Reception updated."
+
+    def delete_log(self, user_id: str, log_id: str) -> tuple[bool, str]:
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE logs
+                SET deleted_utc=?, updated_utc=?, revision=revision+1
+                WHERE user_id=? AND log_id=? AND deleted_utc=''
+                """,
+                (iso_utc(), iso_utc(), user_id, log_id),
+            )
+            if result.rowcount != 1:
+                return False, "Reception was not found or does not belong to the signed-in user."
+        return True, "Reception deleted."
+
+    def logs(self, user_id: str | None = None) -> pd.DataFrame:
+        with self.connect() as connection:
+            if user_id:
+                return pd.read_sql_query(
+                    "SELECT * FROM logs WHERE user_id=? AND deleted_utc='' ORDER BY reception_utc DESC", connection, params=(user_id,)
+                )
+            return pd.read_sql_query("SELECT * FROM logs WHERE deleted_utc='' ORDER BY reception_utc DESC", connection)
+
+    def announcements(self) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT * FROM announcements WHERE active=1 ORDER BY published_utc DESC", connection
+            )
