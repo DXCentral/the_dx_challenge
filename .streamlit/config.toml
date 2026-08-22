@@ -1,0 +1,40 @@
+[theme]
+font = "'Roboto Condensed':https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;500;600;700&display=swap"
+headingFont = "'Roboto Condensed':https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@500;600;700&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+headingFontSizes = ["30px", "24px", "20px", "17px", "15px", "13px"]
+headingFontWeights = [600, 600, 600, 600, 500, 500]
+baseRadius = "6px"
+buttonRadius = "4px"
+showWidgetBorder = true
+linkUnderline = false
+chartCategoricalColors = ["#59A8FF", "#42D392", "#F7C65F", "#A88BFF", "#FF7185", "#61D6E8"]
+
+[theme.light]
+primaryColor = "#146CC8"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#EAF0F7"
+textColor = "#111827"
+borderColor = "#C7D2E0"
+dataframeHeaderBackgroundColor = "#DCE7F4"
+
+[theme.dark]
+primaryColor = "#59A8FF"
+backgroundColor = "#0B111A"
+secondaryBackgroundColor = "#121C29"
+textColor = "#F4F8FC"
+borderColor = "#29405B"
+dataframeHeaderBackgroundColor = "#172638"
+
+[theme.light.sidebar]
+backgroundColor = "#EEF3F9"
+textColor = "#111827"
+
+[theme.dark.sidebar]
+backgroundColor = "#0A1018"
+textColor = "#F4F8FC"
+
+[client]
+toolbarMode = "viewer"
+disableDataExport = true
