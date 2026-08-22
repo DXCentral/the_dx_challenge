@@ -1,0 +1,2 @@
+# Replace the next line with the inbox that should receive support requests.
+support@example.com

@@ -1,0 +1,2 @@
+announcement_id,title,message,start_utc,end_utc,active
+welcome-s7,Season 7 staging is underway,"Complete a band baseline, then use the reviewed log-entry workflow. Test data remains in staging while Google Sheet synchronization is validated.",2026-08-01T00:00:00Z,,true

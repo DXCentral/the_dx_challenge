@@ -1,0 +1,5 @@
+challenge_id,challenge_type,challenge_name,timeframe_tag,start_utc,end_utc,bands,frequencies,include_countries,exclude_countries,propagation_modes,dayparts,description,active
+season_7_mw_marathon,marathon,Season 7 MW Marathon,Season 7 | MW,2026-09-05T02:00:00Z,2027-08-31T23:59:59Z,MW,ALL,,,,,Season-long MW logging,true
+season_7_fm_marathon,marathon,Season 7 FM Marathon,Season 7 | FM,2026-09-05T02:00:00Z,2027-08-31T23:59:59Z,FM,ALL,,,,,Season-long FM logging,true
+season_7_nwr_marathon,marathon,Season 7 NWR Marathon,Season 7 | NWR,2026-09-05T02:00:00Z,2027-08-31T23:59:59Z,NWR,ALL,,,,,Season-long NWR logging,true
+week_1_910_sprint,sprint,The 910 kHz Sprint,Week 1 | 910 kHz,2026-09-05T02:00:00Z,2026-09-06T02:00:00Z,MW,910,,,,,Only 910 kHz MW receptions qualify during this sprint,true
