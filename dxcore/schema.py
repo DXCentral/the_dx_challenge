@@ -2,7 +2,10 @@ from __future__ import annotations
 
 
 SHEET_SCHEMAS: dict[str, list[str]] = {
-    "Users": ["user_id", "email", "display_name", "created_utc", "updated_utc"],
+    "Users": [
+        "user_id", "email", "display_name", "created_utc", "updated_utc",
+        "theme_name", "large_text", "reduce_motion", "walkthrough_complete",
+    ],
     "Locations": [
         "location_id",
         "user_id",
@@ -77,4 +80,5 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "message",
     ],
     "Announcements": ["announcement_id", "title", "body", "published_utc", "active"],
+    "Support Tickets": ["ticket_id", "user_id", "category", "subject", "details", "created_utc", "status"],
 }

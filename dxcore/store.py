@@ -48,7 +48,11 @@ class LocalStore:
                     email TEXT NOT NULL,
                     display_name TEXT NOT NULL,
                     created_utc TEXT NOT NULL,
-                    updated_utc TEXT NOT NULL
+                    updated_utc TEXT NOT NULL,
+                    theme_name TEXT NOT NULL DEFAULT 'Midnight blue',
+                    large_text INTEGER NOT NULL DEFAULT 0,
+                    reduce_motion INTEGER NOT NULL DEFAULT 0,
+                    walkthrough_complete INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS locations (
                     location_id TEXT PRIMARY KEY,
@@ -113,8 +117,28 @@ class LocalStore:
                     published_utc TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 1
                 );
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    ticket_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    details TEXT NOT NULL,
+                    created_utc TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'Prepared'
+                );
                 """
             )
+            existing_user_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+            }
+            for column, definition in {
+                "theme_name": "TEXT NOT NULL DEFAULT 'Midnight blue'",
+                "large_text": "INTEGER NOT NULL DEFAULT 0",
+                "reduce_motion": "INTEGER NOT NULL DEFAULT 0",
+                "walkthrough_complete": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if column not in existing_user_columns:
+                    connection.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
             existing_log_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(logs)").fetchall()
             }
@@ -128,7 +152,7 @@ class LocalStore:
             legacy_nwr_ids = [
                 row[0]
                 for row in connection.execute(
-                    "SELECT DISTINCT station_id FROM logs WHERE band='NWR' AND deleted_utc='' AND station_county<>''"
+                    "SELECT DISTINCT station_id FROM logs WHERE band='NWR' AND deleted_utc=''"
                 ).fetchall()
             ]
             if legacy_nwr_ids:
@@ -161,11 +185,70 @@ class LocalStore:
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     email=excluded.email,
-                    display_name=excluded.display_name,
+                    display_name=CASE
+                        WHEN TRIM(users.display_name)='' THEN excluded.display_name
+                        ELSE users.display_name
+                    END,
                     updated_utc=excluded.updated_utc
                 """,
                 (user_id, email, display_name, now, now),
             )
+
+    def user_profile(self, user_id: str) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def users(self) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT user_id, email, display_name FROM users ORDER BY display_name", connection
+            )
+
+    def update_user_preferences(
+        self,
+        user_id: str,
+        *,
+        display_name: str | None = None,
+        theme_name: str | None = None,
+        large_text: bool | None = None,
+        reduce_motion: bool | None = None,
+        walkthrough_complete: bool | None = None,
+    ) -> None:
+        values: dict[str, object] = {}
+        if display_name is not None:
+            cleaned = display_name.strip()
+            if not cleaned:
+                raise ValueError("Display name cannot be blank.")
+            values["display_name"] = cleaned[:80]
+        if theme_name is not None:
+            values["theme_name"] = theme_name
+        if large_text is not None:
+            values["large_text"] = int(large_text)
+        if reduce_motion is not None:
+            values["reduce_motion"] = int(reduce_motion)
+        if walkthrough_complete is not None:
+            values["walkthrough_complete"] = int(walkthrough_complete)
+        if not values:
+            return
+        values["updated_utc"] = iso_utc()
+        assignments = ", ".join(f"{column}=?" for column in values)
+        with self.connect() as connection:
+            result = connection.execute(
+                f"UPDATE users SET {assignments} WHERE user_id=?",
+                (*values.values(), user_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("The signed-in profile could not be updated.")
+
+    def create_support_ticket(self, user_id: str, category: str, subject: str, details: str) -> str:
+        ticket_id = f"ticket_{uuid.uuid4().hex[:16]}"
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO support_tickets VALUES (?, ?, ?, ?, ?, ?, 'Prepared')",
+                (ticket_id, user_id, category, subject, details, iso_utc()),
+            )
+        return ticket_id
 
     def add_location(self, user_id: str, values: dict[str, object]) -> str:
         location_id = f"qth_{uuid.uuid4().hex[:16]}"
@@ -207,6 +290,10 @@ class LocalStore:
             return pd.read_sql_query(
                 "SELECT * FROM locations WHERE user_id=? ORDER BY is_home DESC, created_utc", connection, params=(user_id,)
             )
+
+    def all_locations(self) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query("SELECT * FROM locations", connection)
 
     def location_usage(self, user_id: str, location_id: str) -> dict[str, int]:
         with self.connect() as connection:

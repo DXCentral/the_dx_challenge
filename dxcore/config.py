@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
+ASSET_DIR = APP_ROOT / "assets"
+CONTENT_DIR = APP_ROOT / "content"
 LOCAL_DATA_DIR = APP_ROOT / ".local"
 LOCAL_DB_PATH = LOCAL_DATA_DIR / "dx_challenge_staging_v1.sqlite3"
 
@@ -17,4 +19,8 @@ STATION_FILES = {
     / "MW International Station List - Season 7 - 081626 - Season 7 International Station List.csv",
     "fm": APP_ROOT / "WTFDA_Season_7_Enriched.csv",
     "nwr": APP_ROOT / "NWR_Transmitters_Cleaned.csv",
+    "nwr_counties": APP_ROOT / "NWR_Station_Counties.csv",
 }
+
+COUNTY_REFERENCE_FILE = ASSET_DIR / "us_county_reference.csv"
+COUNTY_GEOJSON_FILE = ASSET_DIR / "us_counties_5m.geojson"

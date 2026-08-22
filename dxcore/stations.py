@@ -144,18 +144,46 @@ def load_stations() -> pd.DataFrame:
     )
 
     nwr = pd.read_csv(STATION_FILES["nwr"], dtype=str).fillna("")
+    nwr_counties = pd.read_csv(STATION_FILES["nwr_counties"], dtype=str).fillna("")
+    county_rows: dict[tuple[object, ...], dict[str, str]] = {}
+    for row in nwr_counties.to_dict("records"):
+        try:
+            key = (
+                normalize_call(row["callsign"]),
+                round(float(row["frequency"]), 3),
+                round(float(row["latitude"]), 5),
+                round(float(row["longitude"]), 5),
+            )
+        except (TypeError, ValueError):
+            continue
+        county_rows[key] = row
+    resolved_counties: list[str] = []
+    resolved_regions: list[str] = []
+    for row in nwr.to_dict("records"):
+        try:
+            key = (
+                normalize_call(row["CALLSIGN"]),
+                round(float(row["FREQ"]), 3),
+                round(float(row["LAT"]), 5),
+                round(float(row["LON"]), 5),
+            )
+        except (TypeError, ValueError):
+            key = None
+        resolved = county_rows.get(key, {}) if key is not None else {}
+        county = _text(resolved.get("county", "")) or county_lookup.get(
+            _location_key(row["SITELOC"], row["ST"]), ""
+        )
+        resolved_counties.append(county)
+        resolved_regions.append(_text(resolved.get("county_state", "")) or _text(row["ST"]))
     nwr_frame = pd.DataFrame(
         {
             "band": "NWR",
             "frequency": nwr["FREQ"],
             "call": nwr["CALLSIGN"],
             "city": nwr["SITELOC"],
-            "region": nwr["ST"],
+            "region": resolved_regions,
             "country": "United States",
-            "county": [
-                county_lookup.get(_location_key(city, region), "")
-                for city, region in zip(nwr["SITELOC"], nwr["ST"], strict=False)
-            ],
+            "county": resolved_counties,
             "latitude": nwr["LAT"],
             "longitude": nwr["LON"],
         }
