@@ -48,6 +48,7 @@ with st.container(horizontal=True):
         icon=":material/download:",
     )
 
+action_slot = st.container()
 event = st.dataframe(
     safe,
     hide_index=True,
@@ -112,13 +113,14 @@ def delete_reception_dialog(record: dict[str, object]) -> None:
 if notice := st.session_state.pop("logbook_notice", None):
     st.toast(notice)
 
-if event.selection.rows:
-    selected_record = filtered.iloc[event.selection.rows[0]].to_dict()
-    st.caption(f"Selected: {selected_record['call']} · entry ID {selected_record['log_id']}")
-    with st.container(horizontal=True):
-        if st.button("Edit selected reception", icon=":material/edit:"):
-            edit_reception_dialog(selected_record)
-        if st.button("Delete selected reception", icon=":material/delete:"):
-            delete_reception_dialog(selected_record)
-else:
-    st.caption("Select a row to edit or delete that reception.")
+with action_slot:
+    if event.selection.rows:
+        selected_record = filtered.iloc[event.selection.rows[0]].to_dict()
+        st.caption(f"Selected: {selected_record['call']} · entry ID {selected_record['log_id']}")
+        with st.container(horizontal=True):
+            if st.button("Edit selected reception", icon=":material/edit:"):
+                edit_reception_dialog(selected_record)
+            if st.button("Delete selected reception", icon=":material/delete:"):
+                delete_reception_dialog(selected_record)
+    else:
+        st.caption("Select a row below to activate the edit and delete controls.")

@@ -5,25 +5,26 @@ import math
 import pandas as pd
 import streamlit as st
 
-from app_support import get_store
+from app_support import display_names, get_store
+from dxcore.metrics import add_geography_keys, canonical_daypart
 
 
 AWARDS = {
     "MW · MW Master": {"band": "MW", "field": "station_id", "target": 700, "endorsement": 100, "unit": "unique stations"},
-    "MW · Grid Hunter": {"band": "MW", "field": "station_grid", "target": 200, "endorsement": 50, "unit": "unique grids"},
-    "MW · County Hunter": {"band": "MW", "field": "station_county", "target": 200, "endorsement": 50, "unit": "unique counties/parishes"},
+    "MW · Grid Hunter": {"band": "MW", "field": "grid4", "target": 200, "endorsement": 50, "unit": "unique 4-character grids"},
+    "MW · County Hunter": {"band": "MW", "field": "county_key", "target": 200, "endorsement": 50, "unit": "unique counties/parishes"},
     "MW · International DXer": {"band": "MW", "field": "station_country", "target": 20, "endorsement": 5, "unit": "unique countries"},
     "MW · Domestic DXer": {"band": "MW", "field": "station_region", "target": 48, "endorsement": None, "unit": "Lower 48 states"},
     "MW · MW Propagation Master": {"band": "MW", "components": {"Daytime": 20, "Sunrise grayline": 150, "Sunset grayline": 150, "Nighttime": 200}},
     "MW · The Gravedigger": {"band": "MW", "field": "station_id", "target": 150, "endorsement": None, "unit": "unique graveyard stations", "graveyard": True},
     "MW · Master Gravedigger": {"band": "MW", "field": "station_id", "target": 200, "endorsement": None, "unit": "unique graveyard stations", "graveyard": True, "long_distance": 10},
     "FM · FM Master": {"band": "FM", "field": "station_id", "target": 1000, "endorsement": 200, "unit": "unique stations"},
-    "FM · Grid Hunter": {"band": "FM", "field": "station_grid", "target": 200, "endorsement": 50, "unit": "unique grids"},
-    "FM · County Hunter": {"band": "FM", "field": "station_county", "target": 200, "endorsement": 50, "unit": "unique counties/parishes"},
+    "FM · Grid Hunter": {"band": "FM", "field": "grid4", "target": 200, "endorsement": 50, "unit": "unique 4-character grids"},
+    "FM · County Hunter": {"band": "FM", "field": "county_key", "target": 200, "endorsement": 50, "unit": "unique counties/parishes"},
     "FM · Propagation Master": {"band": "FM", "components": {"Tropo": 100, "Meteor Scatter": 100, "Sporadic E": 100}},
     "NWR · NWR Master": {"band": "NWR", "field": "station_id", "target": 100, "endorsement": None, "unit": "unique stations"},
-    "NWR · Grid Hunter": {"band": "NWR", "field": "station_grid", "target": 50, "endorsement": 10, "unit": "unique grids"},
-    "NWR · County Hunter": {"band": "NWR", "field": "station_county", "target": 50, "endorsement": 10, "unit": "unique counties/parishes"},
+    "NWR · Grid Hunter": {"band": "NWR", "field": "grid4", "target": 50, "endorsement": 10, "unit": "unique 4-character grids"},
+    "NWR · County Hunter": {"band": "NWR", "field": "county_key", "target": 50, "endorsement": 10, "unit": "unique counties/parishes"},
     "NWR · WFO Hunter": {"band": "NWR", "field": "wfo", "target": 50, "endorsement": 10, "unit": "unique Weather Forecast Offices"},
     "NWR · Propagation Master": {"band": "NWR", "components": {"Tropo": 5, "Meteor Scatter": 5, "Sporadic E": 5}},
 }
@@ -32,7 +33,7 @@ LOWER_48 = {"AL", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "ID", "IL", "I
 
 
 def qualifying_rows(logs: pd.DataFrame, rule: dict[str, object]) -> pd.DataFrame:
-    rows = logs[logs["band"] == rule["band"]].copy()
+    rows = add_geography_keys(logs[logs["band"] == rule["band"]])
     if rule.get("graveyard"):
         rows = rows[rows["frequency"].astype(float).isin(GRAVEYARD)]
     if rule.get("field") == "station_region":
@@ -50,7 +51,9 @@ def simple_progress(rows: pd.DataFrame, rule: dict[str, object]) -> pd.DataFrame
 
 def component_progress(rows: pd.DataFrame, components: dict[str, int]) -> pd.DataFrame:
     eligible = rows[rows["source"] != "bandscan"].sort_values("reception_utc").drop_duplicates(["user_id", "station_id"])
-    pivot = eligible.groupby(["user_id", "propagation"])["station_id"].nunique().unstack(fill_value=0)
+    eligible = eligible.copy()
+    eligible["award_propagation"] = eligible["propagation"].map(canonical_daypart)
+    pivot = eligible.groupby(["user_id", "award_propagation"])["station_id"].nunique().unstack(fill_value=0)
     for component in components:
         if component not in pivot:
             pivot[component] = 0
@@ -64,6 +67,7 @@ st.title("Awards")
 st.caption("Choose one Season 7 award. Only that award's calculations and details load.")
 
 logs = get_store().logs()
+name_lookup = display_names()
 selected_award = st.selectbox("Award", list(AWARDS), key="selected_award")
 my_only = st.toggle("My progress only", value=True)
 rule = AWARDS[selected_award]
@@ -91,7 +95,9 @@ with st.container(border=True):
         st.progress(0.0, text="No qualifying receptions yet")
     elif not my_only:
         table = leaders.copy()
-        table["DXer"] = table["user_id"].map(lambda value: "You" if value == st.session_state.user["user_id"] else value)
+        table["DXer"] = table["user_id"].map(
+            lambda value: "You" if value == st.session_state.user["user_id"] else name_lookup.get(str(value), "DXer")
+        )
         if components:
             table["Progress"] = table["progress"]
             st.dataframe(
@@ -132,13 +138,21 @@ st.subheader("Counted receptions")
 detail_user = st.session_state.user["user_id"]
 if not my_only and not leaders.empty:
     detail_options = leaders["user_id"].tolist()
-    detail_user = st.selectbox("DXer details", detail_options, format_func=lambda value: "You" if value == st.session_state.user["user_id"] else value)
+    detail_user = st.selectbox(
+        "DXer details",
+        detail_options,
+        format_func=lambda value: "You"
+        if value == st.session_state.user["user_id"]
+        else name_lookup.get(str(value), "DXer"),
+    )
 detail = rows[rows["user_id"] == detail_user].sort_values("reception_utc") if not rows.empty else pd.DataFrame()
 if detail.empty:
     st.caption("No counted receptions for this DXer.")
 else:
     if components:
-        detail = detail[(detail["source"] != "bandscan") & detail["propagation"].isin(components)].drop_duplicates("station_id")
+        detail = detail[detail["source"] != "bandscan"].copy()
+        detail["award_propagation"] = detail["propagation"].map(canonical_daypart)
+        detail = detail[detail["award_propagation"].isin(components)].drop_duplicates("station_id")
     else:
         detail = detail[detail[str(rule["field"])].fillna("").astype(str) != ""].drop_duplicates(str(rule["field"]))
     st.dataframe(detail[["reception_utc", "call", "frequency", "station_city", "station_region", "station_country", "station_county", "station_grid", "propagation", "distance_miles"]], hide_index=True)

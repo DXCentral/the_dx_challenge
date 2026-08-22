@@ -1,6 +1,7 @@
 import streamlit as st
 
-from app_support import bandscan_progress, challenge_status, current_location, get_store
+from app_support import bandscan_progress, challenge_status, current_location
+from dxcore.content import load_announcements
 
 
 st.title("Home")
@@ -40,8 +41,12 @@ else:
                     st.badge("Baseline required", icon=":material/pending:", color="orange")
 
 st.subheader("Announcements")
-for announcement in get_store().announcements().to_dict("records"):
+announcements = load_announcements()
+for announcement in announcements.to_dict("records"):
     with st.container(border=True):
         st.markdown(f"**{announcement['title']}**")
-        st.write(announcement["body"])
-        st.caption(announcement["published_utc"])
+        st.write(announcement["message"])
+        if announcement.get("start_utc"):
+            st.caption(f"Published {announcement['start_utc']}")
+if announcements.empty:
+    st.caption("No active announcements.")

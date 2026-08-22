@@ -36,6 +36,29 @@ with st.container(horizontal=True):
     st.metric("Status", "Unlocked" if ratio == 1 else "In progress", border=True)
 st.progress(ratio, text=f"{ratio:.0%} reviewed at {location['label']}")
 
+
+@st.dialog("Mark remaining frequencies OPEN")
+def confirm_fill_open() -> None:
+    remaining = total - completed
+    st.warning(
+        f"Mark all {remaining:,} unreviewed {band} frequencies OPEN at {location['label']}?"
+    )
+    st.caption(
+        "Existing station and OPEN results will not be overwritten. Use this only after confirming that no station is present on every remaining channel."
+    )
+    if st.button("Mark remaining OPEN", icon=":material/done_all:", type="primary"):
+        store.fill_bandscan_open(user_id, str(location["location_id"]), band, frequencies)
+        st.toast(f"All remaining {band} channels were marked OPEN.")
+        st.rerun()
+
+
+if st.button(
+    "Mark all other frequencies OPEN",
+    icon=":material/done_all:",
+    disabled=completed >= total,
+):
+    confirm_fill_open()
+
 style_rules = []
 for frequency in frequencies:
     token = str(frequency).replace(".", "_")
@@ -161,10 +184,3 @@ with st.sidebar:
                         else:
                             st.warning(f"Baseline saved; no second log was created. {message}")
                         st.rerun()
-
-with st.expander("Local test tools", icon=":material/science:"):
-    st.caption("Available only in local test mode. This accelerates navigation testing without changing Google Sheets.")
-    if st.button("Mark every remaining channel OPEN", icon=":material/done_all:"):
-        store.fill_bandscan_open(user_id, str(location["location_id"]), band, frequencies)
-        st.success(f"{band} is unlocked locally for functional testing.")
-        st.rerun()

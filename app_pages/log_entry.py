@@ -8,7 +8,9 @@ import streamlit as st
 from geopy.geocoders import Nominatim
 
 from app_support import bandscan_progress, get_store, require_location
+from dxcore.content import active_sprints_for_band, frequency_allowed
 from dxcore.geo import haversine_miles, latlon_to_grid
+from dxcore.metrics import canonical_daypart
 from dxcore.solar import mw_propagation
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, stations_on_frequency
 
@@ -70,7 +72,28 @@ if ratio < 1:
     st.page_link("app_pages/bandscan.py", label="Continue the bandscan", icon=":material/grid_view:")
     st.stop()
 
+active_sprints = active_sprints_for_band(band)
 frequencies = band_frequencies(band)
+if active_sprints and not any(
+    challenge["rules"].get("frequencies", "ALL") == "ALL" for challenge in active_sprints
+):
+    frequencies = [
+        value
+        for value in frequencies
+        if any(
+            frequency_allowed(challenge["rules"].get("frequencies", "ALL"), value)
+            for challenge in active_sprints
+        )
+    ]
+if active_sprints:
+    st.info(
+        "Active challenge restrictions for this band: "
+        + ", ".join(str(challenge["name"]) for challenge in active_sprints),
+        icon=":material/event_available:",
+    )
+if not frequencies:
+    st.error("The active challenge schedule does not contain a valid frequency for this band.")
+    st.stop()
 frequency_key = f"log_frequency_{band}"
 st.session_state.setdefault(frequency_key, frequencies[0])
 if st.session_state[frequency_key] not in frequencies:
@@ -124,6 +147,27 @@ if entry_mode == "Station list":
         float(location["longitude"]),
         radius_miles=200 if nearby_only else None,
     )
+    if active_sprints and not matches.empty:
+        def country_allowed(country: object) -> bool:
+            normalized = str(country).strip().casefold()
+            for challenge in active_sprints:
+                if not frequency_allowed(
+                    challenge["rules"].get("frequencies", "ALL"), float(frequency)
+                ):
+                    continue
+                includes = {
+                    str(value).strip().casefold()
+                    for value in challenge["rules"].get("include_countries", [])
+                }
+                excludes = {
+                    str(value).strip().casefold()
+                    for value in challenge["rules"].get("exclude_countries", [])
+                }
+                if (not includes or normalized in includes) and normalized not in excludes:
+                    return True
+            return False
+
+        matches = matches[matches["country"].map(country_allowed)].reset_index(drop=True)
     existing = store.logs(user_id)
     heard_ids = set(existing["station_id"]) if not existing.empty else set()
     if matches.empty:
@@ -228,6 +272,25 @@ if selected is None:
     st.caption("Select a station row to open the review form.")
     st.stop()
 
+if active_sprints:
+    station_country = str(selected.get("country", "")).strip().casefold()
+    eligible_sprints = []
+    for challenge in active_sprints:
+        rules = challenge["rules"]
+        includes = {str(value).strip().casefold() for value in rules.get("include_countries", [])}
+        excludes = {str(value).strip().casefold() for value in rules.get("exclude_countries", [])}
+        if (
+            frequency_allowed(rules.get("frequencies", "ALL"), float(selected["frequency"]))
+            and (not includes or station_country in includes)
+            and station_country not in excludes
+        ):
+            eligible_sprints.append(challenge)
+    if not eligible_sprints:
+        st.error("This station does not meet the active challenge restrictions for this band.")
+        st.stop()
+else:
+    eligible_sprints = []
+
 with st.container(border=True):
     st.subheader("Review reception")
     st.markdown(
@@ -254,9 +317,24 @@ with st.container(border=True):
             st.caption(f"Live UTC timestamp: {reception:%Y-%m-%d %H:%M}")
 
         if band in PROPAGATION:
+            challenge_modes = sorted(
+                {
+                    str(mode)
+                    for challenge in eligible_sprints
+                    for mode in challenge["rules"].get("propagation_modes", [])
+                }
+            )
+            prop_options = [
+                value for value in PROPAGATION[band] if not challenge_modes or value in challenge_modes
+            ]
+            if not prop_options:
+                st.error(
+                    "The active challenge schedule contains a propagation mode that is not recognized by this entry form."
+                )
+                st.stop()
             propagation = st.selectbox(
                 "Propagation mode",
-                PROPAGATION[band],
+                prop_options,
                 key=f"log_prop_{band}",
                 persist_state="session",
             )
@@ -274,6 +352,21 @@ with st.container(border=True):
         submitted = st.form_submit_button("Submit reception", icon=":material/send:", type="primary")
 
     if submitted:
+        allowed_dayparts = {
+            str(value)
+            for challenge in eligible_sprints
+            for value in challenge["rules"].get("dayparts", [])
+        }
+        allowed_modes = {
+            str(value)
+            for challenge in eligible_sprints
+            for value in challenge["rules"].get("propagation_modes", [])
+        }
+        if (allowed_dayparts and canonical_daypart(propagation) not in allowed_dayparts) or (
+            allowed_modes and propagation not in allowed_modes
+        ):
+            st.error("This reception's propagation/daypart does not meet the active challenge rules.")
+            st.stop()
         if timing == "From recording":
             st.session_state.last_recording_date = reception.date()
         accepted, message = store.append_log(

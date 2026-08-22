@@ -5,27 +5,22 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
-from app_support import challenge_status, get_store
+from app_support import challenge_status, display_names, get_store
+from dxcore.content import log_qualifies
+from dxcore.metrics import add_geography_keys
 
 
 def challenge_logs(challenge: dict[str, object]) -> pd.DataFrame:
     logs = get_store().logs()
     if logs.empty:
         return logs
-    reception = pd.to_datetime(logs["reception_utc"], utc=True)
-    rows = logs[
-        (logs["band"] == challenge["band"])
-        & (reception >= challenge["start_utc"])
-        & (reception <= challenge["end_utc"])
-    ].copy()
-    frequencies = challenge["rules"].get("frequencies", "ALL")
-    if frequencies != "ALL":
-        rows = rows[rows["frequency"].astype(float).isin([float(value) for value in frequencies])]
-    return rows
+    mask = logs.apply(lambda row: log_qualifies(row, challenge), axis=1)
+    return add_geography_keys(logs[mask].copy())
 
 
 st.title("Challenges")
 current, previous, future = challenge_status()
+name_lookup = display_names()
 
 st.subheader("Current")
 current_sprints = [item for item in current if item["type"] == "sprint"]
@@ -43,17 +38,21 @@ else:
         if rows.empty:
             st.caption("No qualifying challenge receptions yet.")
         elif view == "Leaderboard":
-            leaders = unique.groupby("user_id").agg(Unique_stations=("station_id", "nunique"), States=("station_region", "nunique"), Countries=("station_country", "nunique"), Grids=("station_grid", "nunique"), Counties=("station_county", "nunique")).sort_values("Unique_stations", ascending=False).reset_index()
-            st.dataframe(leaders, hide_index=True)
+            leaders = unique.groupby("user_id").agg(Unique_stations=("station_id", "nunique"), States=("station_region", "nunique"), Countries=("station_country", "nunique"), Grids=("grid4", lambda values: values[values != ""].nunique()), Counties=("county_key", lambda values: values[values != ""].nunique())).sort_values("Unique_stations", ascending=False).reset_index()
+            leaders.insert(0, "DXer", leaders["user_id"].map(lambda value: name_lookup.get(str(value), "DXer")))
+            st.dataframe(leaders.drop(columns=["user_id"]), hide_index=True)
         elif view == "Map":
             points = unique.dropna(subset=["station_latitude", "station_longitude"])
             st.pydeck_chart(pdk.Deck(layers=[pdk.Layer("ScatterplotLayer", data=points, get_position="[station_longitude, station_latitude]", get_radius=4200, radius_min_pixels=1, radius_max_pixels=5, get_fill_color=[89, 168, 255, 190], pickable=True)], initial_view_state=pdk.ViewState(latitude=float(points["station_latitude"].mean()), longitude=float(points["station_longitude"].mean()), zoom=2.5), tooltip={"text": "{call} · {station_city}, {station_region}"}, map_style=None))
         elif view == "Chart":
             chart_data = unique.groupby("user_id").size().reset_index(name="Unique stations").sort_values("Unique stations", ascending=False).head(10)
-            chart = alt.Chart(chart_data).mark_bar(size=24).encode(x=alt.X("Unique stations:Q"), y=alt.Y("user_id:N", sort="-x", title="DXer"), tooltip=["user_id", "Unique stations"]).properties(height=300)
+            chart_data["DXer"] = chart_data["user_id"].map(lambda value: name_lookup.get(str(value), "DXer"))
+            chart = alt.Chart(chart_data).mark_bar(size=24).encode(x=alt.X("Unique stations:Q"), y=alt.Y("DXer:N", sort="-x"), tooltip=["DXer", "Unique stations"]).properties(height=300)
             st.altair_chart(chart)
         else:
-            st.dataframe(rows[["reception_utc", "user_id", "band", "frequency", "call", "station_city", "station_region", "station_country", "station_grid", "distance_miles", "propagation"]], hide_index=True)
+            table = rows[["reception_utc", "user_id", "band", "frequency", "call", "station_city", "station_region", "station_country", "station_grid", "distance_miles", "propagation"]].copy()
+            table.insert(1, "DXer", table["user_id"].map(lambda value: name_lookup.get(str(value), "DXer")))
+            st.dataframe(table.drop(columns=["user_id"]), hide_index=True)
 
 st.subheader("Previous")
 if not previous:
