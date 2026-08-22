@@ -1,20 +1,52 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
 
-from dxcore.config import CONTENT_DIR, DEFAULT_USER_ID, DEFAULT_USER_NAME, STAGING_SPREADSHEET_ID
+from dxcore.config import (
+    APP_LOGO_FILE,
+    APP_VERSION,
+    CONTENT_DIR,
+    DEFAULT_USER_ID,
+    DEFAULT_USER_NAME,
+    STAGING_SPREADSHEET_ID,
+)
 from dxcore.content import load_challenges
 from dxcore.stations import frequencies_for_band, load_stations
 from dxcore.store import LocalStore
 from dxcore.themes import theme_css
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 @st.cache_resource
 def get_store() -> LocalStore:
-    return LocalStore()
+    local = LocalStore()
+    try:
+        credentials = dict(st.secrets["gcp_service_account"])
+    except (FileNotFoundError, KeyError):
+        return local
+    try:
+        writes_enabled = bool(st.secrets.get("app", {}).get("writes_enabled", True))
+    except (AttributeError, TypeError):
+        writes_enabled = True
+    if not writes_enabled:
+        return local
+    try:
+        from dxcore.sheets import GoogleSheetMirror, HybridStore
+
+        return HybridStore(
+            local,
+            GoogleSheetMirror(credentials, STAGING_SPREADSHEET_ID),
+        )
+    except Exception as error:
+        LOGGER.exception("Google Sheet store initialization failed")
+        local.sync_error = f"{type(error).__name__}: {error}"
+        return local
 
 
 @st.cache_data
@@ -133,36 +165,57 @@ def current_location() -> dict[str, object] | None:
 
 def render_app_bar() -> None:
     locations = operating_locations()
-    with st.container(horizontal=True, vertical_alignment="center"):
-        st.markdown("**The DX Challenge · Season 7**")
-        if authentication_configured():
-            st.badge(
-                st.session_state.user["display_name"],
-                icon=":material/account_circle:",
-                color="blue",
+    controls, brand = st.columns([6, 1], vertical_alignment="center")
+    with controls:
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.markdown(f"**The DX Challenge · Season 7**  :blue-badge[v{APP_VERSION}]")
+            if authentication_configured():
+                st.badge(
+                    st.session_state.user["display_name"],
+                    icon=":material/account_circle:",
+                    color="blue",
+                )
+                st.button("Log out", icon=":material/logout:", on_click=st.logout)
+            else:
+                st.badge("Local test mode", icon=":material/science:", color="blue")
+            if not locations.empty:
+                records = locations.to_dict("records")
+                labels = {
+                    row["location_id"]: f"{row['label']} · {row['city']}, {row['region']} ({row['grid']})"
+                    for row in records
+                }
+                st.selectbox(
+                    "Operating QTH",
+                    options=list(labels),
+                    format_func=labels.get,
+                    key="active_location_id",
+                    persist_state="session",
+                    width=360,
+                )
+            else:
+                st.badge("Location required", icon=":material/location_off:", color="orange")
+    with brand:
+        if APP_LOGO_FILE.exists():
+            with st.container(horizontal_alignment="right"):
+                st.image(APP_LOGO_FILE, width=82)
+    store = get_store()
+    if getattr(store, "sync_enabled", False) and not getattr(store, "sync_error", ""):
+        st.caption(
+            f"Private Google Sheet {STAGING_SPREADSHEET_ID[-8:]} · durable sync active"
+        )
+    elif getattr(store, "sync_error", ""):
+        st.warning(
+            "Google Sheet sync is unavailable. New changes are cached locally but are not yet durable. "
+            "Open the app management logs for the private diagnostic.",
+            icon=":material/cloud_off:",
+        )
+    else:
+        if sheets_credentials_configured():
+            st.caption(
+                "Local test storage · Google Sheet sync is disabled by app.writes_enabled"
             )
-            st.button("Log out", icon=":material/logout:", on_click=st.logout)
         else:
-            st.badge("Local test mode", icon=":material/science:", color="blue")
-        if not locations.empty:
-            records = locations.to_dict("records")
-            labels = {
-                row["location_id"]: f"{row['label']} · {row['city']}, {row['region']} ({row['grid']})"
-                for row in records
-            }
-            st.selectbox(
-                "Operating QTH",
-                options=list(labels),
-                format_func=labels.get,
-                key="active_location_id",
-                persist_state="session",
-                width=360,
-            )
-        else:
-            st.badge("Location required", icon=":material/location_off:", color="orange")
-    st.caption(
-        f"Google Sheet {STAGING_SPREADSHEET_ID[-8:]} is registered, but all writes remain local until private credentials pass validation."
-    )
+            st.caption("Local test storage · Google Sheet sync is not configured in this environment")
 
 
 def require_location() -> dict[str, object]:
