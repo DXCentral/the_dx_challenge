@@ -67,6 +67,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "time_protocol",
         "timezone",
         "row_count",
+        "accepted_count",
         "status",
         "created_utc",
     ],

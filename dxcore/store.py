@@ -11,6 +11,18 @@ from typing import Iterator
 import pandas as pd
 
 from dxcore.config import LOCAL_DB_PATH
+from dxcore.schema import SHEET_SCHEMAS
+
+
+SHEET_TABLES = {
+    "Users": "users",
+    "Locations": "locations",
+    "Logging Entries": "logs",
+    "Bandscan": "bandscan",
+    "Import Batches": "import_batches",
+    "Announcements": "announcements",
+    "Support Tickets": "support_tickets",
+}
 
 
 def utc_now() -> datetime:
@@ -26,6 +38,8 @@ class LocalStore:
 
     def __init__(self, path: Path = LOCAL_DB_PATH) -> None:
         self.path = Path(path)
+        self.sync_enabled = False
+        self.sync_error = ""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.ensure_schema()
 
@@ -126,6 +140,21 @@ class LocalStore:
                     created_utc TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'Prepared'
                 );
+                CREATE TABLE IF NOT EXISTS import_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    source_format TEXT NOT NULL,
+                    date_protocol TEXT NOT NULL,
+                    time_protocol TEXT NOT NULL,
+                    timezone TEXT NOT NULL,
+                    row_count INTEGER NOT NULL,
+                    accepted_count INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    created_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_import_batches_user
+                    ON import_batches(user_id, created_utc);
                 """
             )
             existing_user_columns = {
@@ -203,6 +232,43 @@ class LocalStore:
         with self.connect() as connection:
             return pd.read_sql_query(
                 "SELECT user_id, email, display_name FROM users ORDER BY display_name", connection
+            )
+
+    def sheet_rows(self, sheet_name: str) -> list[dict[str, object]]:
+        if sheet_name not in SHEET_TABLES:
+            return []
+        table = SHEET_TABLES[sheet_name]
+        columns = SHEET_SCHEMAS[sheet_name]
+        with self.connect() as connection:
+            frame = pd.read_sql_query(
+                f"SELECT {','.join(columns)} FROM \"{table}\"",
+                connection,
+            )
+        return frame.where(pd.notna(frame), "").to_dict("records")
+
+    def sheet_row(self, sheet_name: str, row_id: str) -> dict[str, object] | None:
+        if sheet_name not in SHEET_TABLES:
+            return None
+        table = SHEET_TABLES[sheet_name]
+        columns = SHEET_SCHEMAS[sheet_name]
+        key_column = columns[0]
+        with self.connect() as connection:
+            row = connection.execute(
+                f"SELECT {','.join(columns)} FROM \"{table}\" WHERE {key_column}=?",
+                (row_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def merge_sheet_rows(self, sheet_name: str, rows: list[dict[str, object]]) -> None:
+        if sheet_name not in SHEET_TABLES or not rows:
+            return
+        table = SHEET_TABLES[sheet_name]
+        columns = SHEET_SCHEMAS[sheet_name]
+        placeholders = ",".join("?" for _ in columns)
+        with self.connect() as connection:
+            connection.executemany(
+                f"INSERT OR REPLACE INTO \"{table}\"({','.join(columns)}) VALUES ({placeholders})",
+                [tuple(row.get(column, "") for column in columns) for row in rows],
             )
 
     def update_user_preferences(
@@ -402,58 +468,118 @@ class LocalStore:
             )
 
     def append_log(self, values: dict[str, object]) -> tuple[bool, str]:
+        with self.connect() as connection:
+            return self._append_log(connection, values)
+
+    def _append_log(
+        self, connection: sqlite3.Connection, values: dict[str, object]
+    ) -> tuple[bool, str]:
         reception = datetime.fromisoformat(str(values["reception_utc"]).replace("Z", "+00:00"))
         if reception.tzinfo is None:
             reception = reception.replace(tzinfo=timezone.utc)
         lower = iso_utc(reception - timedelta(minutes=5))
         upper = iso_utc(reception + timedelta(minutes=5))
+        duplicate = connection.execute(
+            """
+            SELECT log_id, reception_utc FROM logs
+            WHERE user_id=? AND location_id=? AND station_id=?
+              AND deleted_utc=''
+              AND reception_utc BETWEEN ? AND ?
+            ORDER BY reception_utc LIMIT 1
+            """,
+            (
+                values["user_id"],
+                values["location_id"],
+                values["station_id"],
+                lower,
+                upper,
+            ),
+        ).fetchone()
+        if duplicate:
+            return False, f"Already logged within five minutes ({duplicate['reception_utc']})."
+
+        log_id = f"log_{uuid.uuid4().hex[:20]}"
+        columns = [
+            "log_id", "user_id", "location_id", "station_id", "band", "frequency", "call",
+            "station_city", "station_region", "station_country", "station_county", "station_grid",
+            "station_latitude", "station_longitude", "reception_utc", "distance_miles", "propagation",
+            "is_sdr", "is_portable", "notes", "source", "import_batch_id", "created_utc",
+            "updated_utc", "deleted_utc", "revision",
+        ]
+        now = iso_utc()
+        payload = {
+            "log_id": log_id,
+            "created_utc": now,
+            "updated_utc": now,
+            "deleted_utc": "",
+            "revision": 1,
+            "import_batch_id": "",
+            "notes": "",
+            "source": "manual",
+            "is_sdr": 0,
+            "is_portable": 0,
+            **values,
+            "reception_utc": iso_utc(reception),
+        }
+        connection.execute(
+            f"INSERT INTO logs({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+            tuple(payload.get(column, "") for column in columns),
+        )
+        return True, log_id
+
+    def append_logs(self, rows: list[dict[str, object]]) -> dict[str, object]:
+        accepted_ids: list[str] = []
+        rejected: list[str] = []
         with self.connect() as connection:
-            duplicate = connection.execute(
+            for values in rows:
+                accepted, message = self._append_log(connection, values)
+                if accepted:
+                    accepted_ids.append(message)
+                else:
+                    rejected.append(message)
+        return {
+            "accepted": len(accepted_ids),
+            "rejected": len(rejected),
+            "log_ids": accepted_ids,
+            "messages": rejected,
+        }
+
+    def record_import_batch(
+        self,
+        *,
+        batch_id: str,
+        user_id: str,
+        filename: str,
+        source_format: str,
+        date_protocol: str,
+        time_protocol: str,
+        timezone_name: str,
+        row_count: int,
+        accepted_count: int,
+        status: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
                 """
-                SELECT log_id, reception_utc FROM logs
-                WHERE user_id=? AND location_id=? AND station_id=?
-                  AND deleted_utc=''
-                  AND reception_utc BETWEEN ? AND ?
-                ORDER BY reception_utc LIMIT 1
+                INSERT OR REPLACE INTO import_batches(
+                    batch_id, user_id, filename, source_format, date_protocol,
+                    time_protocol, timezone, row_count, accepted_count, status, created_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    values["user_id"],
-                    values["location_id"],
-                    values["station_id"],
-                    lower,
-                    upper,
+                    batch_id,
+                    user_id,
+                    filename,
+                    source_format,
+                    date_protocol,
+                    time_protocol,
+                    timezone_name,
+                    int(row_count),
+                    int(accepted_count),
+                    status,
+                    iso_utc(),
                 ),
-            ).fetchone()
-            if duplicate:
-                return False, f"Already logged within five minutes ({duplicate['reception_utc']})."
-
-            log_id = f"log_{uuid.uuid4().hex[:20]}"
-            columns = [
-                "log_id", "user_id", "location_id", "station_id", "band", "frequency", "call",
-                "station_city", "station_region", "station_country", "station_county", "station_grid",
-                "station_latitude", "station_longitude", "reception_utc", "distance_miles", "propagation",
-                "is_sdr", "is_portable", "notes", "source", "import_batch_id", "created_utc",
-                "updated_utc", "deleted_utc", "revision",
-            ]
-            payload = {
-                "log_id": log_id,
-                "created_utc": iso_utc(),
-                "updated_utc": iso_utc(),
-                "deleted_utc": "",
-                "revision": 1,
-                "import_batch_id": "",
-                "notes": "",
-                "source": "manual",
-                "is_sdr": 0,
-                "is_portable": 0,
-                **values,
-                "reception_utc": iso_utc(reception),
-            }
-            connection.execute(
-                f"INSERT INTO logs({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
-                tuple(payload.get(column, "") for column in columns),
             )
-        return True, log_id
 
     def update_log(self, user_id: str, log_id: str, values: dict[str, object]) -> tuple[bool, str]:
         allowed = {
