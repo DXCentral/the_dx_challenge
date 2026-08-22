@@ -42,3 +42,16 @@ band, only that band is restricted; normal logging remains open on the other ban
 Replace `support@example.com` with the inbox that should receive support requests.
 The support form prepares a pre-addressed email in the DXer's own email application;
 the app never stores an email password or sends mail silently.
+
+## `release_notes.md`
+
+Add the newest version heading and bullet list at the top. This file appears on
+Community exactly as Markdown, so no Python changes are needed for routine release
+notes. Keep the version label in `dxcore/config.py` synchronized with the newest
+heading when promoting a build.
+
+## `privacy_policy.md`
+
+This Markdown file appears under Privacy policy and disclaimer on Community. Update
+it whenever sign-in scopes, stored data, public visibility, retention, or user
+controls materially change. It must describe what the deployed code actually does.
