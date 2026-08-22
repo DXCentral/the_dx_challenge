@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
-from dxcore.config import DEFAULT_USER_ID, DEFAULT_USER_NAME, STAGING_SPREADSHEET_ID
+from dxcore.config import CONTENT_DIR, DEFAULT_USER_ID, DEFAULT_USER_NAME, STAGING_SPREADSHEET_ID
+from dxcore.content import load_challenges
 from dxcore.stations import frequencies_for_band, load_stations
 from dxcore.store import LocalStore
+from dxcore.themes import theme_css
 
 
 @st.cache_resource
@@ -66,11 +68,50 @@ def current_user() -> dict[str, str]:
 
 def initialize_app_state() -> None:
     user = current_user()
-    get_store().upsert_user(user["user_id"], user["email"], user["display_name"])
-    st.session_state.setdefault("user", user)
+    store = get_store()
+    store.upsert_user(user["user_id"], user["email"], user["display_name"])
+    profile = store.user_profile(user["user_id"]) or user
+    st.session_state.user = {
+        "user_id": user["user_id"],
+        "email": user["email"],
+        "display_name": str(profile.get("display_name", user["display_name"])),
+        "theme_name": str(profile.get("theme_name", "Midnight blue")),
+        "large_text": bool(profile.get("large_text", 0)),
+        "reduce_motion": bool(profile.get("reduce_motion", 0)),
+        "walkthrough_complete": bool(profile.get("walkthrough_complete", 0)),
+    }
     st.session_state.setdefault("active_location_id", "")
     if "pending_active_location_id" in st.session_state:
         st.session_state.active_location_id = st.session_state.pop("pending_active_location_id")
+
+
+def render_user_theme() -> None:
+    user = st.session_state.get("user", {})
+    st.html(
+        theme_css(
+            str(user.get("theme_name", "Midnight blue")),
+            bool(user.get("large_text", False)),
+            bool(user.get("reduce_motion", False)),
+        )
+    )
+
+
+def display_names() -> dict[str, str]:
+    users = get_store().users()
+    if users.empty:
+        return {}
+    return dict(zip(users["user_id"].astype(str), users["display_name"].astype(str), strict=False))
+
+
+def support_email() -> str:
+    path = CONTENT_DIR / "support_email.txt"
+    if not path.exists():
+        return ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if value and not value.startswith("#") and "@" in value and value != "support@example.com":
+            return value
+    return ""
 
 
 def operating_locations() -> pd.DataFrame:
@@ -149,12 +190,60 @@ def bandscan_progress(location_id: str, band: str, mw_spacing: str = "10 kHz") -
 
 
 def challenge_status(now: datetime | None = None) -> tuple[list[dict], list[dict], list[dict]]:
-    from challenge_rules import CHALLENGES
-
     instant = now or datetime.now(timezone.utc)
-    current = [item for item in CHALLENGES if item["start_utc"] <= instant <= item["end_utc"]]
+    challenges = load_challenges()
+    current = [item for item in challenges if item["start_utc"] <= instant <= item["end_utc"]]
     previous = sorted(
-        [item for item in CHALLENGES if item["end_utc"] < instant], key=lambda item: item["end_utc"], reverse=True
+        [item for item in challenges if item["end_utc"] < instant], key=lambda item: item["end_utc"], reverse=True
     )
-    future = sorted([item for item in CHALLENGES if item["start_utc"] > instant], key=lambda item: item["start_utc"])
+    future = sorted([item for item in challenges if item["start_utc"] > instant], key=lambda item: item["start_utc"])
     return current, previous, future
+
+
+@st.dialog("Welcome to The DX Challenge", width="large")
+def walkthrough_dialog() -> None:
+    steps = [
+        ("Set up a receiving location", "Open Profile settings and add your Home QTH or a portable location. Every reception stays tied to the location you used."),
+        ("Complete a bandscan", "Review every channel on MW, FM, or NWR. Log a heard station or mark the channel OPEN. Completing a band unlocks normal logging at that location."),
+        ("Submit receptions", "Choose a band and frequency, select a station, review the timestamp and propagation details, then submit. Row selection alone never creates a log."),
+        ("Track your season", "Use My logbook to edit, delete, or export only your own logs. Awards, challenges, leaderboards, and Stats use canonical unique-station calculations."),
+        ("Get help", "Return to Profile settings at any time to restart this tour or prepare a support request."),
+    ]
+    step = int(st.session_state.get("walkthrough_step", 0))
+    step = max(0, min(step, len(steps) - 1))
+    title, body = steps[step]
+    st.caption(f"Step {step + 1} of {len(steps)}")
+    st.subheader(title)
+    st.write(body)
+    st.progress((step + 1) / len(steps))
+    with st.container(horizontal=True, horizontal_alignment="distribute"):
+        if st.button("Skip tour", icon=":material/close:"):
+            get_store().update_user_preferences(
+                st.session_state.user["user_id"], walkthrough_complete=True
+            )
+            st.session_state.user["walkthrough_complete"] = True
+            st.session_state.pop("force_walkthrough", None)
+            st.session_state.pop("walkthrough_step", None)
+            st.rerun()
+        if step > 0 and st.button("Previous", icon=":material/arrow_back:"):
+            st.session_state.walkthrough_step = step - 1
+            st.rerun()
+        if step < len(steps) - 1:
+            if st.button("Next", icon=":material/arrow_forward:", type="primary"):
+                st.session_state.walkthrough_step = step + 1
+                st.rerun()
+        elif st.button("Finish", icon=":material/check_circle:", type="primary"):
+            get_store().update_user_preferences(
+                st.session_state.user["user_id"], walkthrough_complete=True
+            )
+            st.session_state.user["walkthrough_complete"] = True
+            st.session_state.pop("force_walkthrough", None)
+            st.session_state.pop("walkthrough_step", None)
+            st.rerun()
+
+
+def maybe_show_walkthrough() -> None:
+    if st.session_state.get("force_walkthrough") or not st.session_state.user.get(
+        "walkthrough_complete", False
+    ):
+        walkthrough_dialog()

@@ -1,6 +1,12 @@
 import streamlit as st
 
-from app_support import initialize_app_state, render_app_bar, require_authentication
+from app_support import (
+    initialize_app_state,
+    maybe_show_walkthrough,
+    render_app_bar,
+    render_user_theme,
+    require_authentication,
+)
 
 
 def main() -> None:
@@ -13,6 +19,7 @@ def main() -> None:
 
     require_authentication()
     initialize_app_state()
+    render_user_theme()
 
     pages = [
         st.Page("app_pages/home.py", title="Home", icon=":material/home:", default=True),
@@ -29,6 +36,7 @@ def main() -> None:
 
     navigation = st.navigation(pages, position="top")
     render_app_bar()
+    maybe_show_walkthrough()
     navigation.run()
 
 
