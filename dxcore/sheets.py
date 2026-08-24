@@ -214,6 +214,26 @@ class HybridStore:
         self.local.set_home_location(user_id, location_id)
         self._sync("Locations", self.local.locations(user_id).to_dict("records"))
 
+    def update_location_geography(
+        self,
+        user_id: str,
+        location_id: str,
+        *,
+        grid: str,
+        latitude: float,
+        longitude: float,
+    ) -> tuple[bool, str]:
+        updated, message = self.local.update_location_geography(
+            user_id,
+            location_id,
+            grid=grid,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        if updated:
+            self._sync_one("Locations", location_id)
+        return updated, message
+
     def delete_location(self, user_id: str, location_id: str) -> tuple[bool, str]:
         deleted, message = self.local.delete_location(user_id, location_id)
         if deleted:

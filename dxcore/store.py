@@ -11,6 +11,7 @@ from typing import Iterator
 import pandas as pd
 
 from dxcore.config import CONTENT_DIR, LOCAL_DB_PATH
+from dxcore.geo import latlon_to_grid, valid_coordinates, valid_grid
 from dxcore.schema import SHEET_SCHEMAS
 
 
@@ -452,6 +453,14 @@ class LocalStore:
     def add_location(self, user_id: str, values: dict[str, object]) -> str:
         location_id = f"qth_{uuid.uuid4().hex[:16]}"
         is_home = bool(values.get("is_home"))
+        latitude = values.get("latitude", "")
+        longitude = values.get("longitude", "")
+        if not valid_coordinates(latitude, longitude):
+            raise ValueError("A receiving location requires valid latitude and longitude coordinates.")
+        latitude = float(latitude)
+        longitude = float(longitude)
+        supplied_grid = str(values.get("grid", "")).strip().upper()
+        grid = supplied_grid if valid_grid(supplied_grid) else latlon_to_grid(latitude, longitude)
         with self.connect() as connection:
             if is_home:
                 connection.execute("UPDATE locations SET is_home=0 WHERE user_id=?", (user_id,))
@@ -466,14 +475,40 @@ class LocalStore:
                     str(values.get("city", "")),
                     str(values.get("region", "")),
                     str(values.get("country", "")),
-                    str(values.get("grid", "")),
-                    float(values["latitude"]),
-                    float(values["longitude"]),
+                    grid,
+                    latitude,
+                    longitude,
                     int(is_home),
                     iso_utc(),
                 ),
             )
         return location_id
+
+    def update_location_geography(
+        self,
+        user_id: str,
+        location_id: str,
+        *,
+        grid: str,
+        latitude: float,
+        longitude: float,
+    ) -> tuple[bool, str]:
+        if not valid_coordinates(latitude, longitude):
+            return False, "The repaired coordinates are invalid."
+        supplied_grid = str(grid).strip().upper()
+        cleaned_grid = supplied_grid if valid_grid(supplied_grid) else latlon_to_grid(latitude, longitude)
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE locations SET grid=?, latitude=?, longitude=?
+                WHERE user_id=? AND location_id=?
+                """,
+                (cleaned_grid, float(latitude), float(longitude), user_id, location_id),
+            )
+        return (True, "Location coordinates and grid updated.") if result.rowcount == 1 else (
+            False,
+            "The receiving location was not found.",
+        )
 
     def set_home_location(self, user_id: str, location_id: str) -> None:
         with self.connect() as connection:
