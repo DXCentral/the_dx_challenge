@@ -14,7 +14,14 @@ from dxcore.content import (
     log_qualifies,
     station_qualifies_for_challenge,
 )
-from dxcore.geo import grid_to_latlon, haversine_miles, latlon_to_grid
+from dxcore.geo import (
+    grid_to_latlon,
+    haversine_miles,
+    latlon_to_grid,
+    repair_geography,
+    resolve_place,
+    valid_coordinates,
+)
 from dxcore.metrics import add_geography_keys, canonical_daypart, challenge_scores
 from dxcore.solar import mw_propagation
 from dxcore.stations import load_stations, stations_on_frequency
@@ -45,12 +52,42 @@ class StationTests(unittest.TestCase):
 
 
 class GeographyTests(unittest.TestCase):
+    class FakeGeocoder:
+        def __init__(self) -> None:
+            self.query = ""
+
+        def geocode(self, query: str, **kwargs: object):
+            self.query = query
+            self.kwargs = kwargs
+            return type(
+                "Result",
+                (),
+                {
+                    "latitude": 30.3583,
+                    "longitude": -90.0656,
+                    "address": "Mandeville, St. Tammany Parish, Louisiana, United States",
+                },
+            )()
+
     def test_maidenhead_round_trip(self) -> None:
         latitude, longitude = grid_to_latlon("EM40")
         self.assertEqual(latlon_to_grid(latitude, longitude, precision=4), "EM40")
 
     def test_haversine_identity(self) -> None:
         self.assertAlmostEqual(haversine_miles(30.0, -90.0, 30.0, -90.0), 0.0)
+
+    def test_city_region_lookup_always_derives_coordinates_and_grid(self) -> None:
+        geocoder = self.FakeGeocoder()
+        result = resolve_place("Mandeville", "LA", "United States", geocoder)
+        self.assertEqual(geocoder.query, "Mandeville, LA, United States")
+        self.assertTrue(geocoder.kwargs["addressdetails"])
+        self.assertTrue(valid_coordinates(result["latitude"], result["longitude"]))
+        self.assertEqual(result["grid"], latlon_to_grid(30.3583, -90.0656))
+
+    def test_saved_grid_can_repair_missing_coordinates_without_network(self) -> None:
+        repaired = repair_geography({"grid": "EM40XI", "latitude": "", "longitude": ""})
+        self.assertTrue(valid_coordinates(repaired["latitude"], repaired["longitude"]))
+        self.assertEqual(repaired["grid"], "EM40XI")
 
     def test_mw_diurnal_mode(self) -> None:
         daytime = datetime(2026, 6, 21, 18, 0, tzinfo=timezone.utc)
@@ -239,6 +276,34 @@ class StoreTests(unittest.TestCase):
         deleted, message = self.store.delete_location(self.user_id, self.location_id)
         self.assertFalse(deleted)
         self.assertIn("locked", message)
+
+    def test_location_store_derives_grid_and_can_repair_geography(self) -> None:
+        location_id = self.store.add_location(
+            self.user_id,
+            {
+                "label": "City lookup",
+                "city": "Baton Rouge",
+                "region": "LA",
+                "country": "United States",
+                "grid": "",
+                "latitude": 30.4515,
+                "longitude": -91.1871,
+                "is_home": False,
+            },
+        )
+        before = self.store.locations(self.user_id).set_index("location_id").loc[location_id]
+        self.assertEqual(before["grid"], latlon_to_grid(30.4515, -91.1871))
+        updated, _ = self.store.update_location_geography(
+            self.user_id,
+            location_id,
+            grid="EM40",
+            latitude=30.5,
+            longitude=-91.0,
+        )
+        self.assertTrue(updated)
+        after = self.store.locations(self.user_id).set_index("location_id").loc[location_id]
+        self.assertEqual(after["grid"], "EM40")
+        self.assertAlmostEqual(float(after["latitude"]), 30.5)
 
     def test_custom_display_name_survives_google_identity_refresh(self) -> None:
         self.store.update_user_preferences(
