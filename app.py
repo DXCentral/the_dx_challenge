@@ -1,6 +1,7 @@
 import streamlit as st
 
 from app_support import (
+    admin_page_available,
     initialize_app_state,
     maybe_show_walkthrough,
     render_app_bar,
@@ -33,6 +34,14 @@ def main() -> None:
         st.Page("app_pages/community.py", title="Community", icon=":material/groups:"),
         st.Page("app_pages/profile.py", title="Profile settings", icon=":material/settings:"),
     ]
+    if admin_page_available():
+        pages.append(
+            st.Page(
+                "app_pages/admin.py",
+                title="Administration",
+                icon=":material/admin_panel_settings:",
+            )
+        )
 
     navigation = st.navigation(pages, position="top")
     render_app_bar()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hmac
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -14,7 +15,7 @@ from dxcore.config import (
     DEFAULT_USER_NAME,
     STAGING_SPREADSHEET_ID,
 )
-from dxcore.content import load_challenges
+from dxcore.content import challenges_from_frame, load_challenges
 from dxcore.stations import frequencies_for_band, load_stations
 from dxcore.store import LocalStore
 from dxcore.themes import theme_css
@@ -59,6 +60,53 @@ def authentication_configured() -> bool:
         return "auth" in st.secrets
     except (FileNotFoundError, KeyError):
         return False
+
+
+def _admin_settings() -> tuple[str, str]:
+    try:
+        settings = st.secrets.get("admin", {})
+        return (
+            str(settings.get("email", "")).strip().lower(),
+            str(settings.get("password", "")),
+        )
+    except (FileNotFoundError, AttributeError, TypeError):
+        return "", ""
+
+
+def admin_page_available() -> bool:
+    email, password = _admin_settings()
+    return bool(
+        email
+        and password
+        and str(st.session_state.get("user", {}).get("email", "")).strip().lower()
+        == email
+    )
+
+
+def require_admin_access() -> None:
+    email, expected_password = _admin_settings()
+    signed_in_email = str(st.session_state.get("user", {}).get("email", "")).strip().lower()
+    if not email or not expected_password or signed_in_email != email:
+        st.error("This page is restricted to the configured DX Challenge administrator.")
+        st.stop()
+    if (
+        st.session_state.get("admin_authorized")
+        and st.session_state.get("admin_authorized_email") == signed_in_email
+    ):
+        return
+    st.title("Administration")
+    with st.container(border=True, width=520):
+        st.subheader("Administrator sign-in")
+        st.text_input("Administrator email", value=signed_in_email, disabled=True)
+        password = st.text_input("Administrator password", type="password")
+        if st.button("Open admin portal", icon=":material/admin_panel_settings:", type="primary"):
+            if hmac.compare_digest(password, expected_password):
+                st.session_state.admin_authorized = True
+                st.session_state.admin_authorized_email = signed_in_email
+                st.rerun()
+            else:
+                st.error("The administrator password is incorrect.")
+    st.stop()
 
 
 def sheets_credentials_configured() -> bool:
@@ -181,7 +229,10 @@ def render_app_bar() -> None:
             if not locations.empty:
                 records = locations.to_dict("records")
                 labels = {
-                    row["location_id"]: f"{row['label']} · {row['city']}, {row['region']} ({row['grid']})"
+                    row["location_id"]: (
+                        f"{row['label']} · {row['city']}, {row['region']} ({row['grid']}) · "
+                        f"{'Home' if int(row['is_home']) else 'Alternate'}"
+                    )
                     for row in records
                 }
                 st.selectbox(
@@ -244,7 +295,8 @@ def bandscan_progress(location_id: str, band: str, mw_spacing: str = "10 kHz") -
 
 def challenge_status(now: datetime | None = None) -> tuple[list[dict], list[dict], list[dict]]:
     instant = now or datetime.now(timezone.utc)
-    challenges = load_challenges()
+    frame = get_store().challenges(active_only=True)
+    challenges = challenges_from_frame(frame) if not frame.empty else load_challenges()
     current = [item for item in challenges if item["start_utc"] <= instant <= item["end_utc"]]
     previous = sorted(
         [item for item in challenges if item["end_utc"] < instant], key=lambda item: item["end_utc"], reverse=True
@@ -253,11 +305,22 @@ def challenge_status(now: datetime | None = None) -> tuple[list[dict], list[dict
     return current, previous, future
 
 
+def active_challenges_for_band(
+    band: str, now: datetime | None = None
+) -> list[dict[str, object]]:
+    current, _, _ = challenge_status(now)
+    return [
+        challenge
+        for challenge in current
+        if challenge["type"] == "sprint" and band in challenge["bands"]
+    ]
+
+
 @st.dialog("Welcome to The DX Challenge", width="large")
 def walkthrough_dialog() -> None:
     steps = [
         ("Set up a receiving location", "Open Profile settings and add your Home QTH or a portable location. Every reception stays tied to the location you used."),
-        ("Complete a bandscan", "Review every channel on MW, FM, or NWR. Log a heard station or mark the channel OPEN. Completing a band unlocks normal logging at that location."),
+        ("Explore your bandscan", "Bandscan is a read-only view of the frequencies and stations already in your logbook. Its colors show likely local interference at the selected QTH; it never blocks logging."),
         ("Submit receptions", "Choose a band and frequency, select a station, review the timestamp and propagation details, then submit. Row selection alone never creates a log."),
         ("Track your season", "Use My logbook to edit, delete, or export only your own logs. Awards, challenges, leaderboards, and Stats use canonical unique-station calculations."),
         ("Get help", "Return to Profile settings at any time to restart this tour or prepare a support request."),
