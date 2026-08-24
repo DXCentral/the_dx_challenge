@@ -41,6 +41,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "is_portable",
         "notes",
         "source",
+        "station_review_status",
         "import_batch_id",
         "created_utc",
         "updated_utc",
@@ -80,6 +81,19 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "normalized_json",
         "message",
     ],
-    "Announcements": ["announcement_id", "title", "body", "published_utc", "active"],
-    "Support Tickets": ["ticket_id", "user_id", "category", "subject", "details", "created_utc", "status"],
+    "Announcements": [
+        "announcement_id", "title", "body", "start_utc", "end_utc", "active",
+        "published_utc", "updated_utc",
+    ],
+    "Challenges": [
+        "challenge_id", "challenge_type", "challenge_name", "timeframe_tag",
+        "start_utc", "end_utc", "bands", "frequencies", "include_countries",
+        "exclude_countries", "include_regions", "exclude_regions",
+        "propagation_modes", "dayparts", "min_distance", "max_distance",
+        "scoring_method", "description", "active", "created_utc", "updated_utc",
+    ],
+    "Support Tickets": [
+        "ticket_id", "user_id", "category", "subject", "details", "created_utc",
+        "updated_utc", "status", "admin_comment",
+    ],
 }

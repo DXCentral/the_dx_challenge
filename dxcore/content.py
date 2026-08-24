@@ -64,6 +64,10 @@ def frequency_allowed(spec: object, frequency: float) -> bool:
 
 def load_challenges() -> list[dict[str, object]]:
     frame = pd.read_csv(CHALLENGE_FILE, dtype=str).fillna("")
+    return challenges_from_frame(frame)
+
+
+def challenges_from_frame(frame: pd.DataFrame) -> list[dict[str, object]]:
     challenges: list[dict[str, object]] = []
     for row in frame.to_dict("records"):
         if not _enabled(row.get("active", "true")):
@@ -84,9 +88,18 @@ def load_challenges() -> list[dict[str, object]]:
                 "frequencies": frequencies,
                 "include_countries": _items(row.get("include_countries", "")),
                 "exclude_countries": _items(row.get("exclude_countries", "")),
+                "include_regions": _items(row.get("include_regions", "")),
+                "exclude_regions": _items(row.get("exclude_regions", "")),
                 "propagation_modes": _items(row.get("propagation_modes", "")),
                 "dayparts": _items(row.get("dayparts", "")),
+                "min_distance": float(_text(row.get("min_distance")))
+                if _text(row.get("min_distance"))
+                else None,
+                "max_distance": float(_text(row.get("max_distance")))
+                if _text(row.get("max_distance"))
+                else None,
             },
+            "scoring_method": _text(row.get("scoring_method")) or "Unique stations",
         }
         if challenge["id"] and challenge["name"] and challenge["start_utc"] <= challenge["end_utc"]:
             challenges.append(challenge)
@@ -104,23 +117,55 @@ def active_sprints_for_band(band: str, now: datetime | None = None) -> list[dict
     ]
 
 
+def station_qualifies_for_challenge(
+    station: pd.Series | dict[str, object], challenge: dict[str, object]
+) -> bool:
+    """Apply challenge rules that can be known before a reception is submitted."""
+    value = dict(station)
+    if str(value.get("band", "")).upper() not in challenge["bands"]:
+        return False
+    rules = challenge["rules"]
+    if not frequency_allowed(rules.get("frequencies", "ALL"), float(value.get("frequency", 0))):
+        return False
+    country = _text(value.get("country", value.get("station_country", ""))).casefold()
+    region = _text(value.get("region", value.get("station_region", ""))).casefold()
+    includes = {item.casefold() for item in rules.get("include_countries", [])}
+    excludes = {item.casefold() for item in rules.get("exclude_countries", [])}
+    include_regions = {item.casefold() for item in rules.get("include_regions", [])}
+    exclude_regions = {item.casefold() for item in rules.get("exclude_regions", [])}
+    if includes and country not in includes:
+        return False
+    if country in excludes:
+        return False
+    if include_regions and region not in include_regions:
+        return False
+    if region in exclude_regions:
+        return False
+    distance = pd.to_numeric(value.get("distance_miles"), errors="coerce")
+    minimum = rules.get("min_distance")
+    maximum = rules.get("max_distance")
+    if minimum is not None and (pd.isna(distance) or float(distance) < float(minimum)):
+        return False
+    if maximum is not None and (pd.isna(distance) or float(distance) > float(maximum)):
+        return False
+    return True
+
+
 def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, object]) -> bool:
     value = dict(log)
-    if str(value.get("band", "")).upper() not in challenge["bands"]:
+    station_view = {
+        "band": value.get("band", ""),
+        "frequency": value.get("frequency", 0),
+        "country": value.get("station_country", ""),
+        "region": value.get("station_region", ""),
+        "distance_miles": value.get("distance_miles", ""),
+    }
+    if not station_qualifies_for_challenge(station_view, challenge):
         return False
     reception = pd.to_datetime(value.get("reception_utc"), utc=True).to_pydatetime()
     if not challenge["start_utc"] <= reception <= challenge["end_utc"]:
         return False
     rules = challenge["rules"]
-    if not frequency_allowed(rules.get("frequencies", "ALL"), float(value.get("frequency", 0))):
-        return False
-    country = _text(value.get("station_country")).casefold()
-    includes = {item.casefold() for item in rules.get("include_countries", [])}
-    excludes = {item.casefold() for item in rules.get("exclude_countries", [])}
-    if includes and country not in includes:
-        return False
-    if country in excludes:
-        return False
     propagation = _text(value.get("propagation")).casefold()
     modes = {item.casefold() for item in rules.get("propagation_modes", [])}
     dayparts = {canonical_daypart(item).casefold() for item in rules.get("dayparts", [])}
@@ -132,8 +177,14 @@ def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, objec
 
 
 def load_announcements(now: datetime | None = None) -> pd.DataFrame:
-    instant = now or datetime.now(timezone.utc)
     frame = pd.read_csv(ANNOUNCEMENT_FILE, dtype=str).fillna("")
+    if "body" not in frame and "message" in frame:
+        frame["body"] = frame["message"]
+    return active_announcements(frame, now)
+
+
+def active_announcements(frame: pd.DataFrame, now: datetime | None = None) -> pd.DataFrame:
+    instant = now or datetime.now(timezone.utc)
     if frame.empty:
         return frame
     frame = frame[frame["active"].map(_enabled)].copy()

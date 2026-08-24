@@ -43,3 +43,26 @@ def canonical_daypart(value: object) -> str:
     if "nighttime" in lowered:
         return "Nighttime"
     return text
+
+
+def challenge_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
+    if logs.empty:
+        return pd.DataFrame(columns=["user_id", "score"])
+    rows = add_geography_keys(logs)
+    fields = {
+        "Unique stations": "station_id",
+        "Unique states/provinces": "station_region",
+        "Unique countries": "station_country",
+        "Unique 4-character grids": "grid4",
+        "Unique counties/parishes": "county_key",
+    }
+    if scoring_method == "Total receptions":
+        return rows.groupby("user_id").size().reset_index(name="score").sort_values("score", ascending=False)
+    field = fields.get(scoring_method, "station_id")
+    valid = rows[rows[field].fillna("").astype(str).str.strip() != ""]
+    return (
+        valid.groupby("user_id")[field]
+        .nunique()
+        .reset_index(name="score")
+        .sort_values("score", ascending=False)
+    )

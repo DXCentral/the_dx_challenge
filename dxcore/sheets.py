@@ -195,6 +195,16 @@ class HybridStore:
         self._sync_one("Support Tickets", ticket_id)
         return ticket_id
 
+    def update_support_ticket(
+        self, ticket_id: str, *, status: str, admin_comment: str
+    ) -> tuple[bool, str]:
+        updated, message = self.local.update_support_ticket(
+            ticket_id, status=status, admin_comment=admin_comment
+        )
+        if updated:
+            self._sync_one("Support Tickets", ticket_id)
+        return updated, message
+
     def add_location(self, user_id: str, values: dict[str, object]) -> str:
         location_id = self.local.add_location(user_id, values)
         self._sync("Locations", self.local.locations(user_id).to_dict("records"))
@@ -272,6 +282,46 @@ class HybridStore:
             self._sync_one("Logging Entries", log_id)
         return deleted, message
 
+    def update_station_review_status(
+        self, log_id: str, status: str
+    ) -> tuple[bool, str]:
+        updated, message = self.local.update_station_review_status(log_id, status)
+        if updated:
+            self._sync_one("Logging Entries", log_id)
+        return updated, message
+
     def record_import_batch(self, **values: object) -> None:
         self.local.record_import_batch(**values)
         self._sync_one("Import Batches", str(values["batch_id"]))
+
+    def upsert_announcement(self, values: dict[str, object]) -> str:
+        announcement_id = self.local.upsert_announcement(values)
+        self._sync_one("Announcements", announcement_id)
+        return announcement_id
+
+    def delete_announcement(self, announcement_id: str) -> tuple[bool, str]:
+        deleted, message = self.local.delete_announcement(announcement_id)
+        if deleted:
+            try:
+                self.mirror.delete_row("Announcements", announcement_id)
+                self.sync_error = ""
+            except Exception as error:
+                LOGGER.exception("Google Sheet announcement delete failed")
+                self.sync_error = f"{type(error).__name__}: {error}"
+        return deleted, message
+
+    def upsert_challenge(self, values: dict[str, object]) -> str:
+        challenge_id = self.local.upsert_challenge(values)
+        self._sync_one("Challenges", challenge_id)
+        return challenge_id
+
+    def delete_challenge(self, challenge_id: str) -> tuple[bool, str]:
+        deleted, message = self.local.delete_challenge(challenge_id)
+        if deleted:
+            try:
+                self.mirror.delete_row("Challenges", challenge_id)
+                self.sync_error = ""
+            except Exception as error:
+                LOGGER.exception("Google Sheet challenge delete failed")
+                self.sync_error = f"{type(error).__name__}: {error}"
+        return deleted, message

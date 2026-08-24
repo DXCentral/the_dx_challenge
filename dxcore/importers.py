@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from difflib import SequenceMatcher
 import hashlib
 import html
 import io
@@ -478,6 +479,162 @@ def _match_station(
     return scored[0][2], "Matched to the canonical station list."
 
 
+def suggest_station_matches(
+    stations: pd.DataFrame,
+    *,
+    band: str,
+    frequency: float,
+    source_call: object,
+    city: object,
+    region: object,
+    country: object,
+    limit: int = 3,
+) -> list[dict[str, object]]:
+    """Return review-only candidates; suggestions are never auto-approved."""
+    candidates = stations[
+        (stations["band"].astype(str).str.upper() == band.upper())
+        & ((pd.to_numeric(stations["frequency"], errors="coerce") - frequency).abs() < 0.001)
+    ]
+    if candidates.empty:
+        return []
+    call_token = normalize_token(source_call)
+    city_token = normalize_token(city)
+    region_token = normalize_token(region)
+    country_token = normalize_token(country)
+    scored: list[tuple[float, str, dict[str, object]]] = []
+    for candidate in candidates.to_dict("records"):
+        candidate_call = normalize_token(candidate.get("call"))
+        candidate_city = normalize_token(candidate.get("city"))
+        candidate_region = normalize_token(candidate.get("region"))
+        candidate_country = normalize_token(candidate.get("country"))
+        score = 0.0
+        if call_token and candidate_call:
+            score += 50 * SequenceMatcher(None, call_token, candidate_call).ratio()
+        geography_matches = 0
+        if city_token and city_token == candidate_city:
+            score += 40
+            geography_matches += 1
+        if region_token and region_token == candidate_region:
+            score += 25
+            geography_matches += 1
+        if country_token and (
+            country_token == candidate_country
+            or country_token[:3] == candidate_country[:3]
+        ):
+            score += 20
+            geography_matches += 1
+        if geography_matches or score >= 25:
+            scored.append((score, str(candidate.get("station_id", "")), candidate))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [candidate for _, _, candidate in scored[: max(1, limit)]]
+
+
+def _duplicate_for_resolution(
+    review: pd.DataFrame,
+    row_index: object,
+    station_id: str,
+    reception: datetime,
+    existing_logs: pd.DataFrame,
+) -> datetime | None:
+    candidates: list[datetime] = []
+    if not existing_logs.empty:
+        existing = existing_logs[existing_logs["station_id"].astype(str) == station_id]
+        candidates.extend(
+            value.to_pydatetime()
+            for value in pd.to_datetime(existing["reception_utc"], utc=True, errors="coerce").dropna()
+        )
+    statuses = review["status"].astype(str)
+    station_ids = (
+        review["station_id"].fillna("").astype(str)
+        if "station_id" in review
+        else pd.Series("", index=review.index, dtype=str)
+    )
+    ready = review[
+        (review.index != row_index)
+        & (statuses == "Ready")
+        & (station_ids == station_id)
+    ]
+    candidates.extend(
+        value.to_pydatetime()
+        for value in pd.to_datetime(ready.get("reception_utc"), utc=True, errors="coerce").dropna()
+    )
+    return next(
+        (value for value in candidates if abs((reception - value).total_seconds()) <= 300),
+        None,
+    )
+
+
+def resolve_review_station(
+    review: pd.DataFrame,
+    row_index: object,
+    station: dict[str, object],
+    *,
+    location: dict[str, object],
+    existing_logs: pd.DataFrame,
+    unlisted: bool = False,
+) -> pd.DataFrame:
+    """Apply a user's explicit candidate/unlisted decision to one held row."""
+    result = review.copy()
+    row = result.loc[row_index]
+    reception = pd.to_datetime(row["reception_utc"], utc=True).to_pydatetime()
+    station_id = str(station["station_id"])
+    duplicate = _duplicate_for_resolution(
+        result, row_index, station_id, reception, existing_logs
+    )
+    latitude = pd.to_numeric(station.get("latitude"), errors="coerce")
+    longitude = pd.to_numeric(station.get("longitude"), errors="coerce")
+    distance: float | str = ""
+    if not pd.isna(latitude) and not pd.isna(longitude):
+        distance = round(
+            haversine_miles(
+                float(location["latitude"]),
+                float(location["longitude"]),
+                float(latitude),
+                float(longitude),
+            ),
+            1,
+        )
+    status = "Duplicate" if duplicate else "Ready"
+    message = (
+        f"Same station is already present within five minutes of {duplicate:%Y-%m-%d %H:%M UTC}."
+        if duplicate
+        else (
+            "Approved as an unlisted station and queued for administrator review."
+            if unlisted
+            else "User confirmed the suggested canonical station."
+        )
+    )
+    updates = {
+        "selected": status == "Ready",
+        "status": status,
+        "message": message,
+        "station_id": station_id,
+        "call": str(station.get("call", row.get("source_station", ""))),
+        "station_city": str(station.get("city", row.get("source_city", ""))),
+        "station_region": str(station.get("region", row.get("source_region", ""))),
+        "station_country": str(station.get("country", row.get("source_country", ""))),
+        "station_county": str(station.get("county", row.get("source_county", ""))),
+        "station_grid": str(station.get("grid", row.get("source_grid", ""))),
+        "station_latitude": "" if pd.isna(latitude) else float(latitude),
+        "station_longitude": "" if pd.isna(longitude) else float(longitude),
+        "distance_miles": distance,
+        "station_review_status": "Pending" if unlisted else "",
+        "source": "import_unlisted" if unlisted else row.get("source", "import_custom"),
+    }
+    for column, value in updates.items():
+        if column not in result:
+            result[column] = ""
+        result.at[row_index, column] = value
+    return result
+
+
+def unlisted_station_id(
+    band: str, frequency: float, call: str, city: str, region: str, country: str
+) -> str:
+    raw = f"{band}|{frequency:.3f}|{call}|{city}|{region}|{country}".upper()
+    return f"unlisted_{hashlib.sha1(raw.encode()).hexdigest()[:16]}"
+
+
 def _notes(row: pd.Series, mapping: dict[str, str], source_format: str) -> str:
     parts: list[str] = []
     mapped = str(_value(row, mapping, "notes")).strip()
@@ -507,7 +664,6 @@ def normalize_import(
     location: dict[str, object],
     stations: pd.DataFrame,
     existing_logs: pd.DataFrame,
-    unlocked_bands: set[str],
 ) -> pd.DataFrame:
     results: list[dict[str, object]] = []
     identity_index: dict[tuple[str, float, str], list[dict[str, object]]] = {}
@@ -564,36 +720,76 @@ def normalize_import(
                 region=_value(row, mapping, "region"),
                 country=_value(row, mapping, "country"),
             )
+            source_city = str(_value(row, mapping, "city")).strip()
+            source_region = str(_value(row, mapping, "region")).strip()
+            source_country = str(_value(row, mapping, "country")).strip()
+            source_county = str(_value(row, mapping, "county")).strip()
+            source_grid = str(_value(row, mapping, "grid")).strip().upper()
+            if band == "MW":
+                source_propagation = mw_propagation(
+                    reception,
+                    float(location["latitude"]),
+                    float(location["longitude"]),
+                )
+            else:
+                raw_prop = _value(row, mapping, "propagation") or default_propagation
+                source_propagation = normalize_propagation(raw_prop, band)
             if station is None:
+                suggestions = suggest_station_matches(
+                    stations,
+                    band=band,
+                    frequency=frequency,
+                    source_call=source_call,
+                    city=source_city,
+                    region=source_region,
+                    country=source_country,
+                )
                 base.update(
                     {
+                        "user_id": user_id,
+                        "location_id": str(location["location_id"]),
                         "band": band,
                         "frequency": frequency,
                         "source_station": str(source_call),
+                        "source_city": source_city,
+                        "source_region": source_region,
+                        "source_country": source_country,
+                        "source_county": source_county,
+                        "source_grid": source_grid,
                         "reception_utc": reception.isoformat(),
+                        "propagation": source_propagation,
+                        "is_sdr": int(_bool(_value(row, mapping, "is_sdr"), default_is_sdr)),
+                        "is_portable": int(_bool(_value(row, mapping, "is_portable"), default_is_portable)),
+                        "notes": _notes(row, mapping, source_format),
+                        "station_review_status": "Pending",
+                        "suggestion_ids": "|".join(str(item["station_id"]) for item in suggestions),
+                        "suggestion_labels": "|".join(
+                            f"{item['call']} — {item['city']}, {item['region']}, {item['country']}"
+                            for item in suggestions
+                        ),
                         "status": "Needs review",
-                        "message": match_message,
+                        "message": (
+                            f"{match_message} {len(suggestions)} possible station-list match(es) available."
+                            if suggestions
+                            else match_message
+                        ),
                     }
                 )
                 results.append(base)
                 continue
             station_id = str(station["station_id"])
-            if band not in unlocked_bands:
-                status = "Bandscan locked"
-                message = f"Complete the {band} bandscan at this QTH before importing."
+            candidates = existing_times.get(station_id, []) + batch_times.get(station_id, [])
+            duplicate = next(
+                (value for value in candidates if abs((reception - value).total_seconds()) <= 300),
+                None,
+            )
+            if duplicate is not None:
+                status = "Duplicate"
+                message = f"Same station is already present within five minutes of {duplicate:%Y-%m-%d %H:%M UTC}."
             else:
-                candidates = existing_times.get(station_id, []) + batch_times.get(station_id, [])
-                duplicate = next(
-                    (value for value in candidates if abs((reception - value).total_seconds()) <= 300),
-                    None,
-                )
-                if duplicate is not None:
-                    status = "Duplicate"
-                    message = f"Same station is already present within five minutes of {duplicate:%Y-%m-%d %H:%M UTC}."
-                else:
-                    status = "Ready"
-                    message = match_message
-                    batch_times.setdefault(station_id, []).append(reception)
+                status = "Ready"
+                message = match_message
+                batch_times.setdefault(station_id, []).append(reception)
 
             if band == "MW":
                 propagation = mw_propagation(
@@ -638,6 +834,7 @@ def normalize_import(
                     "is_sdr": int(_bool(_value(row, mapping, "is_sdr"), default_is_sdr)),
                     "is_portable": int(_bool(_value(row, mapping, "is_portable"), default_is_portable)),
                     "notes": _notes(row, mapping, source_format),
+                    "station_review_status": "",
                 }
             )
         except (TypeError, ValueError, OverflowError) as error:
@@ -659,6 +856,7 @@ def log_payloads(review: pd.DataFrame, batch_id: str) -> list[dict[str, object]]
         "station_city", "station_region", "station_country", "station_county",
         "station_grid", "station_latitude", "station_longitude", "reception_utc",
         "distance_miles", "propagation", "is_sdr", "is_portable", "notes", "source",
+        "station_review_status",
     ]
     payloads: list[dict[str, object]] = []
     for row in review[(review["status"] == "Ready") & review["selected"].astype(bool)].to_dict("records"):

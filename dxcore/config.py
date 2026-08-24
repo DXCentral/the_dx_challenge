@@ -9,7 +9,7 @@ CONTENT_DIR = APP_ROOT / "content"
 LOCAL_DATA_DIR = APP_ROOT / ".local"
 LOCAL_DB_PATH = LOCAL_DATA_DIR / "dx_challenge_staging_v1.sqlite3"
 APP_LOGO_FILE = ASSET_DIR / "dx_challenge_logo.png"
-APP_VERSION = "1.0.0-rc4"
+APP_VERSION = "1.0.0-rc5"
 
 STAGING_SPREADSHEET_ID = "1Z0C_bnxCgVMWdhP26MbvKqsGCNcCab0zeSQiIpJzn2A"
 DEFAULT_USER_ID = "local-tester@dxcentralonline.com"
@@ -26,8 +26,3 @@ STATION_FILES = {
 
 COUNTY_REFERENCE_FILE = ASSET_DIR / "us_county_reference.csv"
 COUNTY_GEOJSON_FILE = ASSET_DIR / "us_counties_5m.geojson"
-
-# The one-click OPEN helper is intentionally more demanding on the broadcast
-# bands than NWR, where some receiving locations legitimately hear one or no
-# local transmitters. DXers may still review every channel individually.
-BANDSCAN_STATION_MINIMUMS = {"MW": 5, "FM": 5, "NWR": 1}

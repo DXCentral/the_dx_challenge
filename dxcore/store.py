@@ -10,7 +10,7 @@ from typing import Iterator
 
 import pandas as pd
 
-from dxcore.config import LOCAL_DB_PATH
+from dxcore.config import CONTENT_DIR, LOCAL_DB_PATH
 from dxcore.schema import SHEET_SCHEMAS
 
 
@@ -21,6 +21,7 @@ SHEET_TABLES = {
     "Bandscan": "bandscan",
     "Import Batches": "import_batches",
     "Announcements": "announcements",
+    "Challenges": "challenges",
     "Support Tickets": "support_tickets",
 }
 
@@ -104,6 +105,7 @@ class LocalStore:
                     is_portable INTEGER NOT NULL DEFAULT 0,
                     notes TEXT NOT NULL,
                     source TEXT NOT NULL,
+                    station_review_status TEXT NOT NULL DEFAULT '',
                     import_batch_id TEXT NOT NULL,
                     created_utc TEXT NOT NULL,
                     updated_utc TEXT NOT NULL DEFAULT '',
@@ -128,8 +130,34 @@ class LocalStore:
                     announcement_id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     body TEXT NOT NULL,
+                    start_utc TEXT NOT NULL DEFAULT '',
+                    end_utc TEXT NOT NULL DEFAULT '',
+                    active INTEGER NOT NULL DEFAULT 1,
                     published_utc TEXT NOT NULL,
-                    active INTEGER NOT NULL DEFAULT 1
+                    updated_utc TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS challenges (
+                    challenge_id TEXT PRIMARY KEY,
+                    challenge_type TEXT NOT NULL,
+                    challenge_name TEXT NOT NULL,
+                    timeframe_tag TEXT NOT NULL,
+                    start_utc TEXT NOT NULL,
+                    end_utc TEXT NOT NULL,
+                    bands TEXT NOT NULL,
+                    frequencies TEXT NOT NULL,
+                    include_countries TEXT NOT NULL,
+                    exclude_countries TEXT NOT NULL,
+                    include_regions TEXT NOT NULL,
+                    exclude_regions TEXT NOT NULL,
+                    propagation_modes TEXT NOT NULL,
+                    dayparts TEXT NOT NULL,
+                    min_distance TEXT NOT NULL,
+                    max_distance TEXT NOT NULL,
+                    scoring_method TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS support_tickets (
                     ticket_id TEXT PRIMARY KEY,
@@ -138,7 +166,9 @@ class LocalStore:
                     subject TEXT NOT NULL,
                     details TEXT NOT NULL,
                     created_utc TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'Prepared'
+                    updated_utc TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'Open',
+                    admin_comment TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS import_batches (
                     batch_id TEXT PRIMARY KEY,
@@ -172,12 +202,36 @@ class LocalStore:
                 row[1] for row in connection.execute("PRAGMA table_info(logs)").fetchall()
             }
             for column, definition in {
+                "station_review_status": "TEXT NOT NULL DEFAULT ''",
                 "updated_utc": "TEXT NOT NULL DEFAULT ''",
                 "deleted_utc": "TEXT NOT NULL DEFAULT ''",
                 "revision": "INTEGER NOT NULL DEFAULT 1",
             }.items():
                 if column not in existing_log_columns:
                     connection.execute(f"ALTER TABLE logs ADD COLUMN {column} {definition}")
+            existing_announcement_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(announcements)").fetchall()
+            }
+            for column, definition in {
+                "start_utc": "TEXT NOT NULL DEFAULT ''",
+                "end_utc": "TEXT NOT NULL DEFAULT ''",
+                "updated_utc": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if column not in existing_announcement_columns:
+                    connection.execute(
+                        f"ALTER TABLE announcements ADD COLUMN {column} {definition}"
+                    )
+            existing_ticket_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(support_tickets)").fetchall()
+            }
+            for column, definition in {
+                "updated_utc": "TEXT NOT NULL DEFAULT ''",
+                "admin_comment": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if column not in existing_ticket_columns:
+                    connection.execute(
+                        f"ALTER TABLE support_tickets ADD COLUMN {column} {definition}"
+                    )
             legacy_nwr_ids = [
                 row[0]
                 for row in connection.execute(
@@ -193,16 +247,56 @@ class LocalStore:
                     "UPDATE logs SET station_county=? WHERE band='NWR' AND station_id=?",
                     [(canonical_counties.get(station_id, ""), station_id) for station_id in legacy_nwr_ids],
                 )
-            count = connection.execute("SELECT COUNT(*) FROM announcements").fetchone()[0]
-            if count == 0:
-                connection.execute(
-                    "INSERT INTO announcements VALUES (?, ?, ?, ?, 1)",
-                    (
-                        "welcome-s7",
-                        "Season 7 staging is underway",
-                        "Complete a band baseline, then use the reviewed log-entry workflow. Test data stays local until Google writes are explicitly enabled.",
-                        iso_utc(),
-                    ),
+            self._seed_content(connection)
+
+    def _seed_content(self, connection: sqlite3.Connection) -> None:
+        now = iso_utc()
+        if connection.execute("SELECT COUNT(*) FROM announcements").fetchone()[0] == 0:
+            path = CONTENT_DIR / "announcements.csv"
+            if path.exists():
+                rows = pd.read_csv(path, dtype=str).fillna("").to_dict("records")
+                connection.executemany(
+                    """
+                    INSERT INTO announcements(
+                        announcement_id,title,body,start_utc,end_utc,active,published_utc,updated_utc
+                    ) VALUES (?,?,?,?,?,?,?,?)
+                    """,
+                    [
+                        (
+                            row.get("announcement_id", ""),
+                            row.get("title", ""),
+                            row.get("body", row.get("message", "")),
+                            row.get("start_utc", ""),
+                            row.get("end_utc", ""),
+                            int(str(row.get("active", "true")).lower() not in {"", "0", "false", "no"}),
+                            row.get("start_utc", "") or now,
+                            now,
+                        )
+                        for row in rows
+                        if row.get("announcement_id")
+                    ],
+                )
+        if connection.execute("SELECT COUNT(*) FROM challenges").fetchone()[0] == 0:
+            path = CONTENT_DIR / "challenge_schedule.csv"
+            if path.exists():
+                rows = pd.read_csv(path, dtype=str).fillna("").to_dict("records")
+                columns = SHEET_SCHEMAS["Challenges"]
+                values = []
+                for row in rows:
+                    if not row.get("challenge_id"):
+                        continue
+                    record = {column: row.get(column, "") for column in columns}
+                    record["active"] = int(
+                        str(row.get("active", "true")).lower()
+                        not in {"", "0", "false", "no"}
+                    )
+                    record["scoring_method"] = row.get("scoring_method", "") or "Unique stations"
+                    record["created_utc"] = now
+                    record["updated_utc"] = now
+                    values.append(tuple(record[column] for column in columns))
+                connection.executemany(
+                    f"INSERT INTO challenges({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                    values,
                 )
 
     def upsert_user(self, user_id: str, email: str, display_name: str) -> None:
@@ -309,12 +403,51 @@ class LocalStore:
 
     def create_support_ticket(self, user_id: str, category: str, subject: str, details: str) -> str:
         ticket_id = f"ticket_{uuid.uuid4().hex[:16]}"
+        now = iso_utc()
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO support_tickets VALUES (?, ?, ?, ?, ?, ?, 'Prepared')",
-                (ticket_id, user_id, category, subject, details, iso_utc()),
+                """
+                INSERT INTO support_tickets(
+                    ticket_id,user_id,category,subject,details,created_utc,
+                    updated_utc,status,admin_comment
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Open', '')
+                """,
+                (ticket_id, user_id, category, subject, details, now, now),
             )
         return ticket_id
+
+    def support_tickets(self, user_id: str | None = None) -> pd.DataFrame:
+        with self.connect() as connection:
+            if user_id:
+                return pd.read_sql_query(
+                    "SELECT * FROM support_tickets WHERE user_id=? ORDER BY updated_utc DESC, created_utc DESC",
+                    connection,
+                    params=(user_id,),
+                )
+            return pd.read_sql_query(
+                "SELECT * FROM support_tickets ORDER BY updated_utc DESC, created_utc DESC",
+                connection,
+            )
+
+    def update_support_ticket(
+        self, ticket_id: str, *, status: str, admin_comment: str
+    ) -> tuple[bool, str]:
+        allowed = {"Open", "In progress", "Waiting on DXer", "Resolved", "Closed"}
+        if status not in allowed:
+            return False, "Invalid support-ticket status."
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE support_tickets
+                SET status=?, admin_comment=?, updated_utc=?
+                WHERE ticket_id=?
+                """,
+                (status, admin_comment.strip()[:4000], iso_utc(), ticket_id),
+            )
+        return (True, "Support ticket updated.") if result.rowcount == 1 else (
+            False,
+            "Support ticket was not found.",
+        )
 
     def add_location(self, user_id: str, values: dict[str, object]) -> str:
         location_id = f"qth_{uuid.uuid4().hex[:16]}"
@@ -387,12 +520,6 @@ class LocalStore:
             ).fetchone()[0]
             if log_count:
                 return False, f"This location is locked because {log_count:,} active log(s) use it."
-            scan_count = connection.execute(
-                "SELECT COUNT(*) FROM bandscan WHERE user_id=? AND location_id=?",
-                (user_id, location_id),
-            ).fetchone()[0]
-            if scan_count:
-                return False, f"This location is locked because {scan_count:,} bandscan result(s) use it."
             if location["is_home"]:
                 alternatives = connection.execute(
                     "SELECT COUNT(*) FROM locations WHERE user_id=? AND location_id<>?",
@@ -400,6 +527,9 @@ class LocalStore:
                 ).fetchone()[0]
                 if alternatives:
                     return False, "Choose another Home QTH before deleting this one."
+            connection.execute(
+                "DELETE FROM bandscan WHERE user_id=? AND location_id=?", (user_id, location_id)
+            )
             connection.execute(
                 "DELETE FROM locations WHERE user_id=? AND location_id=?", (user_id, location_id)
             )
@@ -503,7 +633,8 @@ class LocalStore:
             "log_id", "user_id", "location_id", "station_id", "band", "frequency", "call",
             "station_city", "station_region", "station_country", "station_county", "station_grid",
             "station_latitude", "station_longitude", "reception_utc", "distance_miles", "propagation",
-            "is_sdr", "is_portable", "notes", "source", "import_batch_id", "created_utc",
+            "is_sdr", "is_portable", "notes", "source", "station_review_status",
+            "import_batch_id", "created_utc",
             "updated_utc", "deleted_utc", "revision",
         ]
         now = iso_utc()
@@ -516,6 +647,7 @@ class LocalStore:
             "import_batch_id": "",
             "notes": "",
             "source": "manual",
+            "station_review_status": "",
             "is_sdr": 0,
             "is_portable": 0,
             **values,
@@ -651,8 +783,145 @@ class LocalStore:
                 )
             return pd.read_sql_query("SELECT * FROM logs WHERE deleted_utc='' ORDER BY reception_utc DESC", connection)
 
-    def announcements(self) -> pd.DataFrame:
+    def station_review_logs(self) -> pd.DataFrame:
         with self.connect() as connection:
             return pd.read_sql_query(
-                "SELECT * FROM announcements WHERE active=1 ORDER BY published_utc DESC", connection
+                """
+                SELECT * FROM logs
+                WHERE deleted_utc='' AND station_review_status<>''
+                ORDER BY updated_utc DESC
+                """,
+                connection,
             )
+
+    def update_station_review_status(
+        self, log_id: str, status: str
+    ) -> tuple[bool, str]:
+        allowed = {"Pending", "Needs database addition", "Reviewed", "Dismissed"}
+        if status not in allowed:
+            return False, "Invalid station-review status."
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE logs
+                SET station_review_status=?, updated_utc=?, revision=revision+1
+                WHERE log_id=? AND deleted_utc=''
+                """,
+                (status, iso_utc(), log_id),
+            )
+        return (True, "Station review updated.") if result.rowcount == 1 else (
+            False,
+            "Reception was not found.",
+        )
+
+    def announcements(self, active_only: bool = False) -> pd.DataFrame:
+        with self.connect() as connection:
+            where = "WHERE active=1" if active_only else ""
+            return pd.read_sql_query(
+                f"SELECT * FROM announcements {where} ORDER BY start_utc DESC, published_utc DESC",
+                connection,
+            )
+
+    def upsert_announcement(self, values: dict[str, object]) -> str:
+        announcement_id = str(values.get("announcement_id", "")).strip() or f"announcement_{uuid.uuid4().hex[:12]}"
+        title = str(values.get("title", "")).strip()
+        body = str(values.get("body", "")).strip()
+        if not title or not body:
+            raise ValueError("Announcement title and message are required.")
+        now = iso_utc()
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT published_utc FROM announcements WHERE announcement_id=?",
+                (announcement_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO announcements(
+                    announcement_id,title,body,start_utc,end_utc,active,published_utc,updated_utc
+                ) VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(announcement_id) DO UPDATE SET
+                    title=excluded.title, body=excluded.body, start_utc=excluded.start_utc,
+                    end_utc=excluded.end_utc, active=excluded.active,
+                    updated_utc=excluded.updated_utc
+                """,
+                (
+                    announcement_id,
+                    title[:160],
+                    body[:8000],
+                    str(values.get("start_utc", "")),
+                    str(values.get("end_utc", "")),
+                    int(bool(values.get("active", True))),
+                    existing["published_utc"] if existing else now,
+                    now,
+                ),
+            )
+        return announcement_id
+
+    def delete_announcement(self, announcement_id: str) -> tuple[bool, str]:
+        with self.connect() as connection:
+            result = connection.execute(
+                "DELETE FROM announcements WHERE announcement_id=?", (announcement_id,)
+            )
+        return (True, "Announcement deleted.") if result.rowcount == 1 else (
+            False,
+            "Announcement was not found.",
+        )
+
+    def challenges(self, active_only: bool = False) -> pd.DataFrame:
+        with self.connect() as connection:
+            where = "WHERE active=1" if active_only else ""
+            return pd.read_sql_query(
+                f"SELECT * FROM challenges {where} ORDER BY start_utc", connection
+            )
+
+    def upsert_challenge(self, values: dict[str, object]) -> str:
+        challenge_id = str(values.get("challenge_id", "")).strip() or f"challenge_{uuid.uuid4().hex[:12]}"
+        name = str(values.get("challenge_name", "")).strip()
+        if not name:
+            raise ValueError("Challenge name is required.")
+        start = datetime.fromisoformat(str(values.get("start_utc", "")).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(values.get("end_utc", "")).replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        if end <= start:
+            raise ValueError("Challenge end must be later than its start.")
+        columns = SHEET_SCHEMAS["Challenges"]
+        now = iso_utc()
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT created_utc FROM challenges WHERE challenge_id=?", (challenge_id,)
+            ).fetchone()
+            record = {column: str(values.get(column, "")) for column in columns}
+            record.update(
+                {
+                    "challenge_id": challenge_id,
+                    "challenge_name": name[:160],
+                    "start_utc": iso_utc(start),
+                    "end_utc": iso_utc(end),
+                    "active": int(bool(values.get("active", True))),
+                    "created_utc": existing["created_utc"] if existing else now,
+                    "updated_utc": now,
+                }
+            )
+            assignments = ",".join(f"{column}=excluded.{column}" for column in columns[1:])
+            connection.execute(
+                f"""
+                INSERT INTO challenges({','.join(columns)})
+                VALUES ({','.join('?' for _ in columns)})
+                ON CONFLICT(challenge_id) DO UPDATE SET {assignments}
+                """,
+                tuple(record[column] for column in columns),
+            )
+        return challenge_id
+
+    def delete_challenge(self, challenge_id: str) -> tuple[bool, str]:
+        with self.connect() as connection:
+            result = connection.execute(
+                "DELETE FROM challenges WHERE challenge_id=?", (challenge_id,)
+            )
+        return (True, "Challenge deleted.") if result.rowcount == 1 else (
+            False,
+            "Challenge was not found.",
+        )
