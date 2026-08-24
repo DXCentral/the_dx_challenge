@@ -1,11 +1,12 @@
 import streamlit as st
 
-from app_support import bandscan_progress, challenge_status, current_location
-from dxcore.content import load_announcements
+from app_support import challenge_status, get_store
+from dxcore.content import active_announcements
 
 
 st.title("Home")
-location = current_location()
+store = get_store()
+user_id = st.session_state.user["user_id"]
 current, _, future = challenge_status()
 
 with st.container(border=True):
@@ -25,27 +26,27 @@ with st.container(border=True):
     else:
         st.markdown("No weekly challenge is active. Season-long logging remains available.")
 
-st.subheader("Readiness")
-if location is None:
-    st.info("Create your first QTH in Profile Settings to begin a bandscan.", icon=":material/location_on:")
-else:
-    with st.container(horizontal=True):
-        for band in ("MW", "FM", "NWR"):
-            completed, total, ratio = bandscan_progress(str(location["location_id"]), band)
-            with st.container(border=True, width=300):
-                st.markdown(f"**{band} readiness**")
-                st.progress(ratio, text=f"{completed} of {total} channels reviewed")
-                if ratio == 1:
-                    st.badge("Unlocked", icon=":material/lock_open:", color="green")
-                else:
-                    st.badge("Baseline required", icon=":material/pending:", color="orange")
+st.subheader("Season progress")
+logs = store.logs(user_id)
+targets = {"MW": ("MW Master", 700), "FM": ("FM Master", 1000), "NWR": ("NWR Master", 100)}
+with st.container(horizontal=True):
+    for band, (award, target) in targets.items():
+        count = (
+            int(logs[logs["band"] == band]["station_id"].nunique())
+            if not logs.empty
+            else 0
+        )
+        with st.container(border=True, width=300):
+            st.markdown(f"**{award}**")
+            st.progress(min(count / target, 1.0), text=f"{count:,} of {target:,} unique stations")
+            st.page_link("app_pages/awards.py", label="View award details", icon=":material/military_tech:")
 
 st.subheader("Announcements")
-announcements = load_announcements()
+announcements = active_announcements(store.announcements(active_only=True))
 for announcement in announcements.to_dict("records"):
     with st.container(border=True):
         st.markdown(f"**{announcement['title']}**")
-        st.write(announcement["message"])
+        st.write(announcement["body"])
         if announcement.get("start_utc"):
             st.caption(f"Published {announcement['start_utc']}")
 if announcements.empty:

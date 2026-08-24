@@ -21,7 +21,7 @@ store = get_store()
 locations = operating_locations()
 
 if st.session_state.pop("profile_location_saved", False):
-    st.toast("Location saved. Its bandscans begin empty and logs remain tied to this QTH.")
+    st.toast("Location saved. Future receptions can now be tied to this QTH.")
 if notice := st.session_state.pop("profile_notice", None):
     st.toast(notice)
 
@@ -96,7 +96,7 @@ with st.container(border=True):
         st.session_state.profile_notice = f"{theme_name} display settings applied."
         st.rerun()
     st.caption(
-        "Every palette keeps text status alongside color. Keyboard focus remains visible, and the High contrast palette is designed for maximum separation."
+        "Theme control lives here rather than following the browser or operating-system setting. Every palette keeps text status alongside color; High contrast is designed for maximum separation."
     )
 
 
@@ -186,7 +186,10 @@ else:
 
     location_records = locations.to_dict("records")
     choices = {
-        row["location_id"]: f"{row['label']} · {row['city']}, {row['region']}"
+        row["location_id"]: (
+            f"{row['label']} · {row['city']}, {row['region']} · "
+            f"{'Home' if int(row['is_home']) else 'Alternate'}"
+        )
         for row in location_records
     }
     new_home = st.selectbox("Set Home QTH", options=list(choices), format_func=choices.get)
@@ -201,7 +204,7 @@ else:
             selected_row["longitude"],
         )
         st.caption(
-            f"Distance from current Home QTH: {movement:,.1f} miles. A location more than 25 miles away has its own bandscan requirements."
+            f"Distance from current Home QTH: {movement:,.1f} miles. Existing locations and their reception history remain available after the change."
         )
     if st.button("Update Home QTH", icon=":material/home_pin:"):
         store.set_home_location(user["user_id"], new_home)
@@ -219,10 +222,9 @@ else:
         key="profile_delete_location",
     )
     usage = store.location_usage(user["user_id"], delete_choice)
-    if usage["logs"] or usage["bandscan"]:
+    if usage["logs"]:
         st.warning(
-            f"Locked: this location is tied to {usage['logs']:,} active log(s) and "
-            f"{usage['bandscan']:,} bandscan result(s)."
+            f"Locked: this location is tied to {usage['logs']:,} active log(s)."
         )
     else:
         st.caption("Only unused locations can be deleted. This action cannot be undone.")
@@ -246,7 +248,10 @@ with st.container(border=True):
     with st.form("support_ticket_form"):
         category = st.selectbox(
             "Support category",
-            ["Logging entry", "Bandscan", "Import", "Award or leaderboard", "Location", "Other"],
+            [
+                "Logging entry", "Bandscan", "Import", "Award or leaderboard",
+                "Location", "Feature request", "Other",
+            ],
         )
         subject = st.text_input("Subject", max_chars=120)
         details = st.text_area(
@@ -259,8 +264,6 @@ with st.container(border=True):
     if prepare_ticket:
         if not subject.strip() or not details.strip():
             st.error("Enter both a subject and details.")
-        elif not inbox:
-            st.error("The support inbox has not been configured in content/support_email.txt yet.")
         else:
             ticket_id = store.create_support_ticket(
                 user["user_id"], category, subject.strip(), details.strip()
@@ -274,13 +277,38 @@ with st.container(border=True):
             )
             st.session_state.support_mailto = (
                 f"mailto:{inbox}?subject={quote('[DX Challenge] ' + subject.strip())}&body={quote(body)}"
+                if inbox
+                else ""
             )
             st.session_state.support_ticket_id = ticket_id
-    if mailto := st.session_state.get("support_mailto"):
+            st.session_state.profile_notice = (
+                f"Support ticket {ticket_id} was submitted to the administrator portal."
+            )
+            st.rerun()
+    if ticket_id := st.session_state.get("support_ticket_id"):
         st.success(
-            f"Support ticket {st.session_state.get('support_ticket_id', '')} is ready. Your email app will let you review it before sending."
+            f"Support ticket {ticket_id} is recorded."
         )
-        st.link_button("Open email app", mailto, icon=":material/mail:", type="primary")
+        if mailto := st.session_state.get("support_mailto"):
+            st.link_button("Also open email app", mailto, icon=":material/mail:")
+
+    tickets = store.support_tickets(user["user_id"])
+    open_tickets = tickets[~tickets["status"].isin(["Resolved", "Closed"])] if not tickets.empty else tickets
+    st.markdown("**Your open tickets**")
+    if open_tickets.empty:
+        st.caption("No open support or feature-request tickets.")
+    else:
+        st.dataframe(
+            open_tickets[
+                ["ticket_id", "category", "subject", "created_utc", "updated_utc", "status", "admin_comment"]
+            ].rename(columns={"admin_comment": "Most recent administrator comment"}),
+            hide_index=True,
+            column_config={
+                "ticket_id": st.column_config.TextColumn("Ticket"),
+                "created_utc": st.column_config.DatetimeColumn("Created", format="YYYY-MM-DD HH:mm"),
+                "updated_utc": st.column_config.DatetimeColumn("Updated", format="YYYY-MM-DD HH:mm"),
+            },
+        )
 
 st.caption(
     "Data tables cannot be downloaded except through the protected export in My logbook."

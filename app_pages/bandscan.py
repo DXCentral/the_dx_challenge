@@ -1,11 +1,18 @@
-from datetime import datetime, timezone
+from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from app_support import bandscan_progress, get_store, require_location
-from dxcore.config import BANDSCAN_STATION_MINIMUMS
-from dxcore.stations import frequencies_for_band, stations_on_frequency
+from app_support import get_store, require_location
+from dxcore.bandscan import reception_history
+from dxcore.stations import frequencies_for_band
+
+
+COLORS = {
+    "local": ("#B4232F", "#FFFFFF"),
+    "regional": ("#F7C65F", "#17110E"),
+    "open": ("#16794B", "#FFFFFF"),
+}
 
 
 def frequency_label(band: str, value: float) -> str:
@@ -15,188 +22,134 @@ def frequency_label(band: str, value: float) -> str:
 
 
 st.title("Bandscan")
-st.caption("Review every channel as a heard station or OPEN. Unreviewed channels remain red and locked.")
+st.caption(
+    "Explore your submitted reception history by frequency. Bandscan is optional and never restricts log entry."
+)
 
 location = require_location()
-store = get_store()
 user_id = st.session_state.user["user_id"]
+logs = get_store().logs(user_id)
 
-band = st.segmented_control("Band", ["MW", "FM", "NWR"], default="MW", key="scan_band")
+band = st.segmented_control(
+    "Band",
+    ["MW", "FM", "NWR"],
+    default="MW" if "scan_band" not in st.session_state else None,
+    key="scan_band",
+    persist_state="session",
+)
 mw_spacing = "10 kHz"
 if band == "MW":
     mw_spacing = st.segmented_control(
-        "MW channel spacing", ["10 kHz", "9 kHz"], default="10 kHz", key="scan_mw_spacing"
+        "MW channel spacing",
+        ["10 kHz", "9 kHz"],
+        default="10 kHz" if "scan_mw_spacing" not in st.session_state else None,
+        key="scan_mw_spacing",
+        persist_state="session",
     )
+
 frequencies = frequencies_for_band(band, mw_spacing)
-scan = store.bandscan(user_id, str(location["location_id"]), band)
-records = {round(float(row["frequency"]), 3): row for row in scan.to_dict("records")}
-completed, total, ratio = bandscan_progress(str(location["location_id"]), band, mw_spacing)
-station_count = int((scan["status"] == "STATION").sum()) if not scan.empty else 0
-station_minimum = BANDSCAN_STATION_MINIMUMS[band]
+history = reception_history(
+    logs,
+    band=band,
+    location_id=str(location["location_id"]),
+)
+band_rows = (
+    logs[
+        (logs["band"].astype(str).str.upper() == band)
+        & (logs["location_id"].astype(str) == str(location["location_id"]))
+    ]
+    if not logs.empty
+    else pd.DataFrame()
+)
 
 with st.container(horizontal=True):
-    st.metric(f"{band} readiness", f"{completed} / {total}", border=True)
-    st.metric("Stations confirmed", f"{station_count} / {station_minimum}", border=True)
-    st.metric("Status", "Unlocked" if ratio == 1 else "In progress", border=True)
-st.progress(ratio, text=f"{ratio:.0%} reviewed at {location['label']}")
+    st.metric("Frequencies heard", f"{len(history):,}", border=True)
+    unique_stations = int(band_rows["station_id"].nunique()) if not band_rows.empty else 0
+    st.metric("Unique stations", f"{unique_stations:,}", border=True)
+    st.metric("Submitted receptions", f"{len(band_rows):,}", border=True)
 
+st.caption(
+    ":red-badge[Red · station within 50 mi] "
+    ":orange-badge[Yellow · station within 200 mi] "
+    ":green-badge[Green · only stations beyond 200 mi]"
+)
 
-@st.dialog("Mark remaining frequencies OPEN")
-def confirm_fill_open() -> None:
-    remaining = total - completed
-    if station_count < station_minimum:
-        st.error(
-            f"Confirm at least {station_minimum} actual {band} station"
-            f"{'s' if station_minimum != 1 else ''} before using the bulk OPEN helper."
-        )
-        return
-    st.warning(
-        f"Mark all {remaining:,} unreviewed {band} frequencies OPEN at {location['label']}?"
-    )
-    st.caption(
-        "Existing station and OPEN results will not be overwritten. Use this only after confirming that no station is present on every remaining channel."
-    )
-    if st.button("Mark remaining OPEN", icon=":material/done_all:", type="primary"):
-        store.fill_bandscan_open(user_id, str(location["location_id"]), band, frequencies)
-        st.toast(f"All remaining {band} channels were marked OPEN.")
-        st.rerun()
-
-
-if st.button(
-    "Mark all other frequencies OPEN",
-    icon=":material/done_all:",
-    disabled=completed >= total or station_count < station_minimum,
-):
-    confirm_fill_open()
-if completed < total and station_count < station_minimum:
-    st.caption(
-        f"Bulk OPEN unlocks after {station_minimum} actual {band} station"
-        f"{'s are' if station_minimum != 1 else ' is'} confirmed "
-        f"({station_count}/{station_minimum}). Individual channels can always be reviewed manually."
-    )
-
-style_rules = []
-for frequency in frequencies:
+style_rules: list[str] = []
+frequency_keys = {round(value, 3) for value in frequencies}
+for frequency, summary in history.items():
+    if frequency not in frequency_keys:
+        continue
     token = str(frequency).replace(".", "_")
-    color = "#16794B" if round(frequency, 3) in records else "#A52B38"
+    background, text_color = COLORS[str(summary["interference"])]
     style_rules.append(
-        f".st-key-scan_{band}_{token} button {{border-color:{color}; box-shadow:inset 0 -3px 0 {color};}}"
+        f".st-key-scan_{band}_{token} button {{"
+        f"background-color:{background} !important; color:{text_color} !important; "
+        f"border-color:{background} !important; font-weight:600;}}"
     )
-st.html(f"<style>{''.join(style_rules)}</style>")
+if style_rules:
+    st.html(f"<style>{''.join(style_rules)}</style>")
 
-st.subheader("Channel matrix")
+st.subheader("Frequency matrix")
 for start in range(0, len(frequencies), 7):
     columns = st.columns(7, gap="small", wrap=True)
     for column, frequency in zip(columns, frequencies[start : start + 7], strict=False):
-        key = round(frequency, 3)
-        saved = records.get(key)
-        status = "EMPTY" if saved is None else (saved["call"] or saved["status"])
-        token = str(frequency).replace(".", "_")
-        if column.button(
-            f"{frequency_label(band, frequency)} · {status}",
-            key=f"scan_{band}_{token}",
-            width="stretch",
-        ):
-            st.session_state[f"scan_active_frequency_{band}"] = frequency
+        key = round(float(frequency), 3)
+        summary = history.get(key)
+        count = int(summary["unique_stations"]) if summary else 0
+        label = frequency_label(band, frequency) + (f" ({count})" if count else "")
+        token = str(key).replace(".", "_")
+        if column.button(label, key=f"scan_{band}_{token}", width="stretch"):
+            st.session_state[f"scan_active_frequency_{band}"] = key
 
 active_frequency = st.session_state.get(f"scan_active_frequency_{band}")
-if active_frequency not in frequencies:
+if active_frequency not in frequency_keys:
     active_frequency = None
 
-if active_frequency is None:
-    st.info("Select a frequency to open its review drawer on the left.", icon=":material/swipe_left:")
-
 with st.sidebar:
-    st.subheader("Bandscan review")
+    st.subheader("Frequency history")
     if active_frequency is None:
-        st.caption("Choose an EMPTY or completed frequency in the channel matrix.")
+        st.caption("Choose a frequency in the matrix to see your submitted receptions.")
     else:
-        st.markdown(f"**{frequency_label(band, active_frequency)}**")
-        show_all = st.toggle("Expand beyond 200 miles", key=f"scan_expand_{band}")
-        radius = None if show_all else 200
-        matches = stations_on_frequency(
-            band,
-            active_frequency,
-            float(location["latitude"]),
-            float(location["longitude"]),
-            radius_miles=radius,
-        )
-        st.session_state.setdefault("bandscan_is_sdr", False)
-        st.session_state.setdefault("bandscan_is_portable", not bool(location["is_home"]))
-        is_sdr = st.checkbox("Received using an SDR", key="bandscan_is_sdr", persist_state="session")
-        is_portable = st.checkbox("Portable operation", key="bandscan_is_portable", persist_state="session")
-
-        if st.button("Mark OPEN", icon=":material/radio_button_unchecked:", type="primary"):
-            store.save_bandscan(
-                user_id, str(location["location_id"]), band, active_frequency, "OPEN", call="OPEN"
-            )
-            st.toast(f"{frequency_label(band, active_frequency)} marked OPEN")
-            st.rerun()
-        st.caption("OPEN means the channel was reviewed and no station was heard.")
-
-        if matches.empty:
-            st.info("No listed stations were found for this frequency and distance range.")
+        st.markdown(f"**{frequency_label(band, float(active_frequency))}**")
+        summary = history.get(float(active_frequency))
+        if not summary:
+            st.caption("No stations have been logged on this frequency from the selected QTH.")
         else:
-            station_view = matches[["call", "city", "region", "distance_miles"]].rename(
-                columns={
-                    "call": "Station",
-                    "city": "City",
-                    "region": "State / province",
-                    "distance_miles": "Miles",
-                }
+            rows = summary["rows"].copy()
+            rows["station_key"] = rows["station_id"].fillna("").astype(str)
+            blank = rows["station_key"].str.strip() == ""
+            rows.loc[blank, "station_key"] = (
+                rows.loc[blank, "call"].fillna("").astype(str)
+                + "|"
+                + rows.loc[blank, "station_city"].fillna("").astype(str)
+                + "|"
+                + rows.loc[blank, "station_region"].fillna("").astype(str)
             )
-            event = st.dataframe(
-                station_view,
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                key=f"scan_station_table_{band}_{active_frequency}",
-                column_config={"Miles": st.column_config.NumberColumn(format="%.1f")},
+            st.caption(
+                f"{int(summary['unique_stations']):,} unique station(s) · {len(rows):,} reception(s)"
             )
-            if event.selection.rows:
-                selected = matches.iloc[event.selection.rows[0]].to_dict()
+            for _, station_rows in rows.groupby("station_key", sort=False):
+                first = station_rows.iloc[0]
+                location_parts = [
+                    str(first.get("station_city", "")).strip(),
+                    str(first.get("station_region", "")).strip(),
+                    str(first.get("station_country", "")).strip(),
+                ]
+                station_location = ", ".join(part for part in location_parts if part)
                 with st.container(border=True):
-                    st.markdown(
-                        f"**Selected:** {selected['call']} · {selected['city']}, {selected['region']} · {selected['distance_miles']:.1f} miles"
+                    st.markdown(f"**{first['call']}**")
+                    if station_location:
+                        st.caption(station_location)
+                    receptions = pd.to_datetime(
+                        station_rows["reception_utc"], utc=True, errors="coerce"
                     )
-                    st.caption("This creates the baseline result and a normal reception log.")
-                    if st.button("Confirm station", icon=":material/check_circle:", type="primary"):
-                        store.save_bandscan(
-                            user_id,
-                            str(location["location_id"]),
-                            band,
-                            active_frequency,
-                            "STATION",
-                            station_id=str(selected["station_id"]),
-                            call=str(selected["call"]),
+                    for (_, reception_row), instant in zip(
+                        station_rows.iterrows(), receptions, strict=False
+                    ):
+                        when = (
+                            instant.strftime("%Y-%m-%d %H:%M UTC")
+                            if not pd.isna(instant)
+                            else str(reception_row.get("reception_utc", ""))
                         )
-                        propagation = "Groundwave" if band == "MW" else "Local"
-                        accepted, message = store.append_log(
-                            {
-                                "user_id": user_id,
-                                "location_id": str(location["location_id"]),
-                                "station_id": selected["station_id"],
-                                "band": band,
-                                "frequency": float(selected["frequency"]),
-                                "call": selected["call"],
-                                "station_city": selected["city"],
-                                "station_region": selected["region"],
-                                "station_country": selected["country"],
-                                "station_county": selected["county"],
-                                "station_grid": selected["grid"],
-                                "station_latitude": selected["latitude"],
-                                "station_longitude": selected["longitude"],
-                                "reception_utc": datetime.now(timezone.utc).isoformat(),
-                                "distance_miles": selected["distance_miles"],
-                                "propagation": propagation,
-                                "is_sdr": int(is_sdr),
-                                "is_portable": int(is_portable),
-                                "notes": "Bandscan baseline",
-                                "source": "bandscan",
-                            }
-                        )
-                        if accepted:
-                            st.toast(f"{selected['call']} saved to the baseline and logbook")
-                        else:
-                            st.warning(f"Baseline saved; no second log was created. {message}")
-                        st.rerun()
+                        propagation = str(reception_row.get("propagation", "")).strip() or "Unspecified"
+                        st.markdown(f"- {when} · {propagation}")
