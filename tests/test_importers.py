@@ -11,6 +11,8 @@ from dxcore.importers import (
     normalize_import,
     parse_reception,
     read_upload,
+    resolve_review_station,
+    unlisted_station_id,
 )
 from dxcore.store import LocalStore
 from dxcore.sheets import HybridStore
@@ -80,7 +82,7 @@ class UploadParsingTests(unittest.TestCase):
 
 
 class NormalizationTests(unittest.TestCase):
-    def _normalize(self, frame: pd.DataFrame, source_format: str, existing=None, unlocked=None):
+    def _normalize(self, frame: pd.DataFrame, source_format: str, existing=None):
         return normalize_import(
             frame,
             source_format=source_format,
@@ -96,7 +98,6 @@ class NormalizationTests(unittest.TestCase):
             location=LOCATION,
             stations=STATIONS,
             existing_logs=existing if existing is not None else pd.DataFrame(),
-            unlocked_bands=unlocked if unlocked is not None else {"MW", "FM", "NWR"},
         )
 
     def test_fmlist_hd_suffix_maps_to_canonical_station(self) -> None:
@@ -123,6 +124,7 @@ class NormalizationTests(unittest.TestCase):
         review = self._normalize(frame, "FMList")
         self.assertEqual(review.iloc[0]["status"], "Needs review")
         self.assertFalse(bool(review.iloc[0]["selected"]))
+        self.assertIn("fm_ktbz", review.iloc[0]["suggestion_ids"])
 
     def test_duplicate_window_is_inclusive_during_review(self) -> None:
         frame = pd.DataFrame(
@@ -134,13 +136,58 @@ class NormalizationTests(unittest.TestCase):
         review = self._normalize(frame, "FMList", existing=existing)
         self.assertEqual(review.iloc[0]["status"], "Duplicate")
 
-    def test_locked_band_cannot_be_selected_for_import(self) -> None:
+    def test_bandscan_no_longer_blocks_import(self) -> None:
         frame = pd.DataFrame(
             [{"Propa": "Tropo", "Date": "28.06.21", "UTC": "0000", "MHz": "94.50", "ITU": "USA", "Program": "KTBZ", "Location": "Houston", "Reg": "TX"}]
         )
-        review = self._normalize(frame, "FMList", unlocked={"MW"})
-        self.assertEqual(review.iloc[0]["status"], "Bandscan locked")
-        self.assertFalse(bool(review.iloc[0]["selected"]))
+        review = self._normalize(frame, "FMList")
+        self.assertEqual(review.iloc[0]["status"], "Ready")
+        self.assertTrue(bool(review.iloc[0]["selected"]))
+
+    def test_user_can_confirm_suggested_canonical_station(self) -> None:
+        frame = pd.DataFrame(
+            [{"Propa": "Tropo", "Date": "28.06.21", "UTC": "0000", "MHz": "94.50", "ITU": "USA", "Program": "The Buzz", "Location": "Houston", "Reg": "TX"}]
+        )
+        review = self._normalize(frame, "FMList")
+        self.assertEqual(review.iloc[0]["status"], "Needs review")
+        resolved = resolve_review_station(
+            review,
+            review.index[0],
+            STATIONS.iloc[0].to_dict(),
+            location=LOCATION,
+            existing_logs=pd.DataFrame(),
+        )
+        self.assertEqual(resolved.iloc[0]["status"], "Ready")
+        self.assertEqual(resolved.iloc[0]["call"], "KTBZ")
+        self.assertEqual(resolved.iloc[0]["station_review_status"], "")
+
+    def test_unlisted_approval_is_flagged_for_admin_review(self) -> None:
+        frame = pd.DataFrame(
+            [{"Propa": "Tropo", "Date": "28.06.21", "UTC": "0000", "MHz": "94.50", "ITU": "USA", "Program": "UNKNOWN", "Location": "Elsewhere", "Reg": "MS"}]
+        )
+        review = self._normalize(frame, "FMList")
+        station = {
+            "station_id": unlisted_station_id("FM", 94.5, "UNKNOWN", "Elsewhere", "MS", "United States"),
+            "call": "UNKNOWN",
+            "city": "Elsewhere",
+            "region": "MS",
+            "country": "United States",
+            "county": "",
+            "grid": "EM50",
+            "latitude": 30.0,
+            "longitude": -89.0,
+        }
+        resolved = resolve_review_station(
+            review,
+            review.index[0],
+            station,
+            location=LOCATION,
+            existing_logs=pd.DataFrame(),
+            unlisted=True,
+        )
+        self.assertEqual(resolved.iloc[0]["status"], "Ready")
+        self.assertEqual(resolved.iloc[0]["station_review_status"], "Pending")
+        self.assertEqual(resolved.iloc[0]["source"], "import_unlisted")
 
 
 class BatchStoreTests(unittest.TestCase):

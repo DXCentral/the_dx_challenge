@@ -6,9 +6,16 @@ from pathlib import Path
 
 import pandas as pd
 
-from dxcore.content import frequency_allowed, load_challenges
+from dxcore.bandscan import reception_history
+from dxcore.content import (
+    challenges_from_frame,
+    frequency_allowed,
+    load_challenges,
+    log_qualifies,
+    station_qualifies_for_challenge,
+)
 from dxcore.geo import grid_to_latlon, haversine_miles, latlon_to_grid
-from dxcore.metrics import add_geography_keys, canonical_daypart
+from dxcore.metrics import add_geography_keys, canonical_daypart, challenge_scores
 from dxcore.solar import mw_propagation
 from dxcore.stations import load_stations, stations_on_frequency
 from dxcore.store import LocalStore
@@ -69,6 +76,79 @@ class GeographyTests(unittest.TestCase):
         challenge = next(item for item in load_challenges() if item["id"] == "week_1_910_sprint")
         self.assertTrue(frequency_allowed(challenge["rules"]["frequencies"], 910.0))
         self.assertFalse(frequency_allowed(challenge["rules"]["frequencies"], 920.0))
+
+    def test_challenge_station_filter_and_final_log_use_same_geography_rules(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "challenge_id": "us_only",
+                    "challenge_type": "sprint",
+                    "challenge_name": "US only",
+                    "start_utc": "2026-09-01T00:00:00Z",
+                    "end_utc": "2026-09-30T23:59:59Z",
+                    "bands": "FM",
+                    "frequencies": "ALL",
+                    "include_countries": "United States",
+                    "min_distance": "100",
+                    "scoring_method": "Unique states/provinces",
+                    "active": "true",
+                }
+            ]
+        ).fillna("")
+        challenge = challenges_from_frame(frame)[0]
+        station = {
+            "band": "FM",
+            "frequency": 94.5,
+            "country": "United States",
+            "region": "TX",
+            "distance_miles": 300,
+        }
+        self.assertTrue(station_qualifies_for_challenge(station, challenge))
+        log = {
+            "band": "FM",
+            "frequency": 94.5,
+            "station_country": "United States",
+            "station_region": "TX",
+            "distance_miles": 300,
+            "reception_utc": "2026-09-10T02:00:00Z",
+            "propagation": "Tropo",
+        }
+        self.assertTrue(log_qualifies(log, challenge))
+        log["station_country"] = "Mexico"
+        self.assertFalse(log_qualifies(log, challenge))
+
+    def test_challenge_scoring_method_counts_unique_geography(self) -> None:
+        rows = pd.DataFrame(
+            {
+                "user_id": ["a", "a", "a", "b"],
+                "station_region": ["TX", "TX", "LA", "MS"],
+                "station_id": ["1", "2", "3", "4"],
+                "station_country": ["United States"] * 4,
+                "station_grid": ["EM10", "EM20", "EM30", "EM40"],
+                "station_county": ["A", "B", "C", "D"],
+            }
+        )
+        scores = challenge_scores(rows, "Unique states/provinces").set_index("user_id")
+        self.assertEqual(scores.loc["a", "score"], 2)
+
+    def test_bandscan_history_uses_unique_station_count_and_distance_color(self) -> None:
+        logs = pd.DataFrame(
+            {
+                "location_id": ["home", "home", "home", "home"],
+                "band": ["FM", "FM", "FM", "FM"],
+                "frequency": [94.5, 94.5, 94.5, 100.1],
+                "station_id": ["a", "a", "b", "c"],
+                "call": ["A", "A", "B", "C"],
+                "station_city": ["One", "One", "Two", "Three"],
+                "station_region": ["LA", "LA", "MS", "TX"],
+                "distance_miles": [25, 25, 350, 500],
+                "reception_utc": ["2026-09-01T00:00:00Z"] * 4,
+            }
+        )
+        history = reception_history(logs, band="FM", location_id="home")
+        self.assertEqual(history[94.5]["unique_stations"], 2)
+        self.assertEqual(history[94.5]["interference"], "local")
+        self.assertEqual(history[100.1]["interference"], "open")
 
 
 class StoreTests(unittest.TestCase):
@@ -172,6 +252,37 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(profile["display_name"], "Robert")
         self.assertEqual(profile["theme_name"], "High contrast")
         self.assertEqual(profile["walkthrough_complete"], 1)
+
+    def test_admin_content_and_ticket_workflows_are_durable_locally(self) -> None:
+        announcement_id = self.store.upsert_announcement(
+            {"title": "Test", "body": "Message", "start_utc": "2026-09-01T00:00:00+00:00", "active": True}
+        )
+        self.assertIn(announcement_id, self.store.announcements()["announcement_id"].tolist())
+        challenge_id = self.store.upsert_challenge(
+            {
+                "challenge_name": "Distance test",
+                "challenge_type": "sprint",
+                "timeframe_tag": "Week X",
+                "start_utc": "2026-09-01T00:00:00+00:00",
+                "end_utc": "2026-09-02T00:00:00+00:00",
+                "bands": "FM",
+                "frequencies": "ALL",
+                "min_distance": "500",
+                "scoring_method": "Unique stations",
+                "active": True,
+            }
+        )
+        self.assertIn(challenge_id, self.store.challenges()["challenge_id"].tolist())
+        ticket_id = self.store.create_support_ticket(
+            self.user_id, "Feature request", "Add this", "Details"
+        )
+        updated, _ = self.store.update_support_ticket(
+            ticket_id, status="In progress", admin_comment="Reviewing it now."
+        )
+        self.assertTrue(updated)
+        ticket = self.store.support_tickets(self.user_id).iloc[0]
+        self.assertEqual(ticket["status"], "In progress")
+        self.assertEqual(ticket["admin_comment"], "Reviewing it now.")
 
 
 if __name__ == "__main__":
