@@ -1,11 +1,12 @@
 # Season content files
 
-These files are designed to be edited directly in GitHub. Saving a commit causes
-Streamlit Community Cloud to redeploy and use the revised content.
+These files seed a brand-new installation. After the app has created its private
+Google Sheet tables, manage announcements and challenges from the protected **Admin**
+page so changes are durable and take effect without a GitHub redeploy.
 
 ## `announcements.csv`
 
-Add one row per announcement.
+Seed one row per announcement. Use **Admin → Announcements** for deployed changes.
 
 - `announcement_id`: Short unique ID; do not reuse an old ID.
 - `title`: Heading shown on Home.
@@ -16,7 +17,8 @@ Add one row per announcement.
 
 ## `challenge_schedule.csv`
 
-Add one row per season-long or weekly challenge. Times are always UTC.
+Seed one row per season-long or weekly challenge. Use **Admin → Challenges** for
+deployed changes. Times are always UTC.
 
 - `challenge_id`: Short unique ID.
 - `challenge_type`: `marathon` for season-long or `sprint` for a weekly challenge.
@@ -28,14 +30,20 @@ Add one row per season-long or weekly challenge. Times are always UTC.
   or multiple values/ranges separated with `|`.
 - `include_countries`: Optional country allow-list separated with `|`.
 - `exclude_countries`: Optional country block-list separated with `|`.
+- `include_regions` and `exclude_regions`: Optional state/province allow- and
+  block-lists separated with `|`.
+- `min_distance_miles` and `max_distance_miles`: Optional inclusive distance limits.
 - `propagation_modes`: Optional FM/NWR modes separated with `|`.
 - `dayparts`: Optional MW automatic modes separated with `|`. Supported values are
   `Daytime`, `Sunrise grayline`, `Sunset grayline`, and `Nighttime`.
+- `scoring_method`: `Unique stations`, `Total logs`, `Unique states/provinces`,
+  `Unique countries`, `Unique grids`, or `Unique counties`.
 - `description`: Public explanation of the challenge.
 - `active`: `true` enables the row; `false` keeps it as a draft.
 
-Leave a restriction field blank to allow all values. If a sprint is active for one
-band, only that band is restricted; normal logging remains open on the other bands.
+Leave a restriction field blank to allow all values. Active challenges never prevent
+ordinary season logging. A DXer may opt into a challenge filter on Log Entry, while
+the results pages independently enforce every rule when calculating challenge scores.
 
 ## `support_email.txt`
 

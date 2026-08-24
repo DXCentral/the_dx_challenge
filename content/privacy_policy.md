@@ -1,6 +1,6 @@
 The DX Challenge uses Google sign-in only to establish a stable account identity. The app **does not receive or store your Google password**, and it does not request access to your contacts, Gmail, Google Drive, or unrelated Google account data.
 
-To operate the challenge, the app retains the minimum profile information supplied by sign-in (account identifier, email address, and display name), the display/accessibility settings you choose, receiving locations you create, reception logs you submit, bandscan results, and support requests you prepare. This information is used only to run your account, calculate challenge results and awards, and provide the community statistics described in the app.
+To operate the challenge, the app retains the minimum profile information supplied by sign-in (account identifier, email address, and display name), the display/accessibility settings you choose, receiving locations you create, reception logs you submit, and support or feature requests you submit. This information is used only to run your account, calculate challenge results and awards, provide the community statistics described in the app, and let an administrator respond to requests.
 
 Durable challenge records are kept in a private Google Sheet controlled by DX Central and accessed by the app's restricted service account. The Sheet is not published as an account directory or made available as a station-list export.
 

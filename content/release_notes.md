@@ -1,3 +1,13 @@
+### Version 1.0.0-rc5 · Fifth-round testing
+
+- Reworked Bandscan into a read-only reception-history view with unique-station counts, distance-based channel colors, and detailed station/date/time/propagation history.
+- Removed the bandscan prerequisite so all bands and frequencies remain available for season-long logging.
+- Made active-challenge station filtering optional while preserving strict criteria for final challenge scoring.
+- Added a protected administration portal for announcements, challenge scheduling, support responses, and unlisted-station review.
+- Added Feature requests and in-app ticket status/latest-response visibility.
+- Moved all display palettes to Profile settings and strengthened light, dark, and high-contrast widget styling.
+- Added an importer resolution workflow: suggested matches require confirmation, while approved unlisted stations remain flagged for administrator review.
+
 ### Version 1.0.0-rc4 · Fourth-round testing
 
 - Added the reviewed bulk-import workflow for FMList, MWList, WLogger, and mapped CSV/XLSX files.
