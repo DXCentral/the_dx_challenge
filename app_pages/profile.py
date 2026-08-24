@@ -1,6 +1,7 @@
 from urllib.parse import quote
 
 import streamlit as st
+from geopy.exc import GeopyError
 from geopy.geocoders import Nominatim
 
 from app_support import (
@@ -9,7 +10,15 @@ from app_support import (
     operating_locations,
     support_email,
 )
-from dxcore.geo import grid_to_latlon, haversine_miles, latlon_to_grid
+from dxcore.geo import (
+    grid_to_latlon,
+    haversine_miles,
+    latlon_to_grid,
+    repair_geography,
+    resolve_place,
+    valid_coordinates,
+    valid_grid,
+)
 from dxcore.themes import THEMES
 
 
@@ -20,8 +29,9 @@ user = st.session_state.user
 store = get_store()
 locations = operating_locations()
 
-if st.session_state.pop("profile_location_saved", False):
-    st.toast("Location saved. Future receptions can now be tied to this QTH.")
+saved_location_message = st.session_state.pop("profile_location_saved", "")
+if saved_location_message:
+    st.toast(str(saved_location_message))
 if notice := st.session_state.pop("profile_notice", None):
     st.toast(notice)
 
@@ -100,6 +110,12 @@ with st.container(border=True):
     )
 
 
+@st.cache_data(ttl="30d", max_entries=500)
+def geocode_city_region(city: str, region: str, country: str) -> dict[str, object]:
+    geocoder = Nominatim(user_agent="dx_challenge_s7_location_lookup", timeout=8)
+    return resolve_place(city, region, country, geocoder)
+
+
 @st.dialog("Add a receiving location", width="large")
 def add_location_dialog() -> None:
     method = st.segmented_control(
@@ -125,6 +141,8 @@ def add_location_dialog() -> None:
             longitude = st.number_input(
                 "Longitude", min_value=-180.0, max_value=180.0, value=0.0, format="%.6f"
             )
+        else:
+            st.caption("Saving will look up this place and automatically store its coordinates and 6-character Maidenhead grid.")
         make_home = st.checkbox("Make this my Home QTH", value=locations.empty)
         submitted = st.form_submit_button(
             "Save location", icon=":material/save:", type="primary"
@@ -137,17 +155,10 @@ def add_location_dialog() -> None:
             if method == "Maidenhead grid":
                 latitude, longitude = grid_to_latlon(grid)
             elif method == "City / region":
-                query = ", ".join(
-                    value for value in [city.strip(), region.strip(), country.strip()] if value
-                )
-                if not query:
-                    raise ValueError("Enter a city, region, or country to search.")
-                result = Nominatim(user_agent="dx_challenge_s7_staging", timeout=8).geocode(query)
-                if result is None:
-                    raise ValueError(
-                        "That location could not be found. Try a grid or manual coordinates."
-                    )
-                latitude, longitude = float(result.latitude), float(result.longitude)
+                resolved = geocode_city_region(city, region, country)
+                latitude = float(resolved["latitude"])
+                longitude = float(resolved["longitude"])
+                grid = str(resolved["grid"])
             if not grid:
                 grid = latlon_to_grid(latitude, longitude)
             location_id = store.add_location(
@@ -164,9 +175,11 @@ def add_location_dialog() -> None:
                 },
             )
             st.session_state.pending_active_location_id = location_id
-            st.session_state.profile_location_saved = True
+            st.session_state.profile_location_saved = (
+                f"Location saved · {grid} · {latitude:.5f}, {longitude:.5f}."
+            )
             st.rerun()
-        except (ValueError, OSError) as error:
+        except (ValueError, OSError, GeopyError) as error:
             st.error(str(error))
 
 
@@ -183,6 +196,52 @@ else:
     ].copy()
     display["is_home"] = display["is_home"].map({1: "Home", 0: "Portable / alternate"})
     st.dataframe(display, hide_index=True)
+
+    incomplete = locations[
+        locations.apply(
+            lambda row: not valid_coordinates(row.get("latitude"), row.get("longitude"))
+            or not valid_grid(row.get("grid")),
+            axis=1,
+        )
+    ]
+    if not incomplete.empty:
+        with st.container(border=True):
+            st.warning(
+                "One or more saved locations are missing coordinates or a valid grid. Repair them before using those locations for distance calculations."
+            )
+            incomplete_records = incomplete.to_dict("records")
+            repair_options = {row["location_id"]: f"{row['label']} · {row['city']}, {row['region']}" for row in incomplete_records}
+            repair_choice = st.selectbox(
+                "Location to repair",
+                options=list(repair_options),
+                format_func=repair_options.get,
+            )
+            if st.button("Repair location data", icon=":material/my_location:"):
+                selected = next(row for row in incomplete_records if row["location_id"] == repair_choice)
+                try:
+                    if valid_coordinates(selected.get("latitude"), selected.get("longitude")) or valid_grid(selected.get("grid")):
+                        repaired = repair_geography(selected)
+                    else:
+                        repaired = geocode_city_region(
+                            str(selected.get("city", "")),
+                            str(selected.get("region", "")),
+                            str(selected.get("country", "")),
+                        )
+                    updated, message = store.update_location_geography(
+                        user["user_id"],
+                        repair_choice,
+                        grid=str(repaired["grid"]),
+                        latitude=float(repaired["latitude"]),
+                        longitude=float(repaired["longitude"]),
+                    )
+                    if not updated:
+                        raise ValueError(message)
+                    st.session_state.profile_notice = (
+                        f"{message} {repaired['grid']} · {float(repaired['latitude']):.5f}, {float(repaired['longitude']):.5f}."
+                    )
+                    st.rerun()
+                except (ValueError, OSError, GeopyError) as error:
+                    st.error(str(error))
 
     location_records = locations.to_dict("records")
     choices = {
