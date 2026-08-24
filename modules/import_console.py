@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
+from geopy.geocoders import Nominatim
 
-from app_support import bandscan_progress, get_station_data, get_store
+from app_support import get_station_data, get_store
+from dxcore.geo import grid_to_latlon, latlon_to_grid
 from dxcore.importers import (
     NOT_MAPPED,
     import_batch_id,
@@ -14,6 +16,8 @@ from dxcore.importers import (
     mapping_for_format,
     normalize_import,
     read_upload,
+    resolve_review_station,
+    unlisted_station_id,
 )
 
 
@@ -98,8 +102,162 @@ def _status_metrics(review: pd.DataFrame) -> None:
         st.metric("Ready", f"{counts.get('Ready', 0):,}", border=True)
         st.metric("Duplicates", f"{counts.get('Duplicate', 0):,}", border=True)
         st.metric("Needs review", f"{counts.get('Needs review', 0):,}", border=True)
-        st.metric("Bandscan locked", f"{counts.get('Bandscan locked', 0):,}", border=True)
         st.metric("Invalid", f"{counts.get('Invalid', 0):,}", border=True)
+
+
+def _review_held_rows(
+    review: pd.DataFrame,
+    *,
+    review_key: str,
+    file_token: str,
+    location: dict[str, object],
+) -> None:
+    held = review[review["status"] == "Needs review"]
+    if held.empty:
+        return
+    st.subheader("Resolve held rows")
+    st.caption(
+        "Select a held row, confirm a suggested canonical station, or approve it as unlisted. Nothing is imported until it becomes Ready and is selected in the main review table."
+    )
+    held_view = held[
+        [
+            "source_row", "band", "frequency", "source_station", "source_city",
+            "source_region", "source_country", "reception_utc", "message",
+        ]
+    ]
+    event = st.dataframe(
+        held_view,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"bulk_import_held_{file_token}",
+        column_config={
+            "source_row": st.column_config.NumberColumn("Source row", format="%d"),
+            "reception_utc": st.column_config.DatetimeColumn(
+                "Reception (UTC)", format="YYYY-MM-DD HH:mm"
+            ),
+        },
+    )
+    if not event.selection.rows:
+        return
+    selected_position = event.selection.rows[0]
+    if selected_position >= len(held):
+        return
+    row_index = held.index[selected_position]
+    row = review.loc[row_index]
+    suggestion_ids = [
+        value for value in str(row.get("suggestion_ids", "")).split("|") if value
+    ]
+    suggestion_labels = [
+        value for value in str(row.get("suggestion_labels", "")).split("|") if value
+    ]
+    station_data = get_station_data()
+    station_lookup = {
+        str(record["station_id"]): record
+        for record in station_data[station_data["station_id"].isin(suggestion_ids)].to_dict("records")
+    }
+    with st.container(border=True):
+        st.markdown(
+            f"**Source row {int(row['source_row'])}: {row['source_station']}** · "
+            f"{row['frequency']} · {row.get('source_city', '')}, {row.get('source_region', '')}, {row.get('source_country', '')}"
+        )
+        if suggestion_ids:
+            labels = dict(zip(suggestion_ids, suggestion_labels, strict=False))
+            candidate_id = st.selectbox(
+                "Suggested canonical match",
+                suggestion_ids,
+                format_func=lambda value: labels.get(value, value),
+                key=f"bulk_import_suggestion_{file_token}_{row_index}",
+            )
+            if st.button(
+                "Confirm suggested station",
+                icon=":material/check_circle:",
+                type="primary",
+                key=f"bulk_import_confirm_suggestion_{file_token}_{row_index}",
+            ):
+                station = station_lookup.get(candidate_id)
+                if station is None:
+                    st.error("That station-list candidate is no longer available.")
+                else:
+                    st.session_state[review_key] = resolve_review_station(
+                        review,
+                        row_index,
+                        station,
+                        location=location,
+                        existing_logs=get_store().logs(st.session_state.user["user_id"]),
+                    )
+                    st.rerun()
+        else:
+            st.caption("No safe station-list suggestion was found for this row.")
+
+        unlisted = st.toggle(
+            "Approve as an unlisted station",
+            key=f"bulk_import_unlisted_toggle_{file_token}_{row_index}",
+            help="Use this only after checking the uploaded station details. The resulting reception is flagged for administrator review.",
+        )
+        if unlisted:
+            with st.form(f"bulk_import_unlisted_form_{file_token}_{row_index}"):
+                columns = st.columns(2)
+                call = columns[0].text_input("Station call / name", value=str(row["source_station"]))
+                city = columns[1].text_input("Station city", value=str(row.get("source_city", "")))
+                columns = st.columns(2)
+                region = columns[0].text_input("State / province / region", value=str(row.get("source_region", "")))
+                country = columns[1].text_input("Country", value=str(row.get("source_country", "")))
+                columns = st.columns(2)
+                county = columns[0].text_input("County / parish", value=str(row.get("source_county", "")))
+                grid = columns[1].text_input("Grid (if known)", value=str(row.get("source_grid", ""))).upper()
+                approve = st.form_submit_button(
+                    "Approve and queue for admin review",
+                    icon=":material/playlist_add_check:",
+                    type="primary",
+                )
+            if approve:
+                if not call.strip() or not city.strip() or not country.strip():
+                    st.error("Station name, city, and country are required.")
+                else:
+                    latitude = longitude = None
+                    resolved_grid = grid.strip()
+                    try:
+                        if resolved_grid:
+                            latitude, longitude = grid_to_latlon(resolved_grid)
+                        else:
+                            query = ", ".join(
+                                value.strip()
+                                for value in (city, region, country)
+                                if value.strip()
+                            )
+                            result = Nominatim(
+                                user_agent="dx_challenge_s7_import_review", timeout=8
+                            ).geocode(query)
+                            if result is not None:
+                                latitude, longitude = float(result.latitude), float(result.longitude)
+                                resolved_grid = latlon_to_grid(latitude, longitude)
+                    except (OSError, ValueError):
+                        latitude = longitude = None
+                    station = {
+                        "station_id": unlisted_station_id(
+                            str(row["band"]), float(row["frequency"]), call, city, region, country
+                        ),
+                        "band": row["band"],
+                        "frequency": float(row["frequency"]),
+                        "call": call.strip(),
+                        "city": city.strip(),
+                        "region": region.strip(),
+                        "country": country.strip(),
+                        "county": county.strip(),
+                        "grid": resolved_grid,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                    }
+                    st.session_state[review_key] = resolve_review_station(
+                        review,
+                        row_index,
+                        station,
+                        location=location,
+                        existing_logs=get_store().logs(st.session_state.user["user_id"]),
+                        unlisted=True,
+                    )
+                    st.rerun()
 
 
 def render_import_console(location: dict[str, object]) -> None:
@@ -229,11 +387,6 @@ def render_import_console(location: dict[str, object]) -> None:
         key=f"bulk_import_process_{file_token}",
     ):
         store = get_store()
-        unlocked = {
-            band
-            for band in ("MW", "FM", "NWR")
-            if bandscan_progress(str(location["location_id"]), band)[2] == 1
-        }
         with st.spinner("Normalizing stations, timestamps, and duplicates…"):
             review = normalize_import(
                 parsed.frame,
@@ -250,7 +403,6 @@ def render_import_console(location: dict[str, object]) -> None:
                 location=location,
                 stations=get_station_data(),
                 existing_logs=store.logs(st.session_state.user["user_id"]),
-                unlocked_bands=unlocked,
             )
         st.session_state[review_key] = review
         st.session_state[f"{review_key}_settings"] = {
@@ -268,7 +420,7 @@ def render_import_console(location: dict[str, object]) -> None:
     st.subheader("Import review")
     _status_metrics(review)
     st.caption(
-        "Only green-ready rows can be selected. Duplicate, ambiguous, locked, and invalid rows are never written."
+        "Only green-ready rows can be selected. Duplicate and invalid rows are never written; held rows can be resolved below."
     )
     display_columns = [
         "selected", "status", "source_row", "band", "frequency", "source_station",
@@ -296,6 +448,12 @@ def render_import_console(location: dict[str, object]) -> None:
     review["selected"] = editor["selected"].astype(bool)
     review.loc[review["status"] != "Ready", "selected"] = False
     st.session_state[review_key] = review
+    _review_held_rows(
+        review,
+        review_key=review_key,
+        file_token=file_token,
+        location=location,
+    )
     selected_count = int(((review["status"] == "Ready") & review["selected"]).sum())
 
     confirm = st.checkbox(
