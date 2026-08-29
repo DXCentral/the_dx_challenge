@@ -250,16 +250,25 @@ def render_app_bar() -> None:
             with st.container(horizontal_alignment="right"):
                 st.image(APP_LOGO_FILE, width=82)
     store = get_store()
-    if getattr(store, "sync_enabled", False) and not getattr(store, "sync_error", ""):
+    pending_sync = int(getattr(store, "pending_sync_count", 0))
+    if getattr(store, "sync_enabled", False) and not getattr(store, "sync_error", "") and not pending_sync:
         st.caption(
             f"Private Google Sheet {STAGING_SPREADSHEET_ID[-8:]} · durable sync active"
         )
-    elif getattr(store, "sync_error", ""):
+    elif getattr(store, "sync_error", "") or pending_sync:
         st.warning(
-            "Google Sheet sync is unavailable. New changes are cached locally but are not yet durable. "
-            "Open the app management logs for the private diagnostic.",
+            "Google Sheet sync is temporarily unavailable. New changes are retained in this server's local cache, "
+            "but are not durable until the status returns to 'durable sync active'. Retry below; if the status recovers "
+            "and the change appears in the Sheet, no further action is needed.",
             icon=":material/cloud_off:",
         )
+        if hasattr(store, "retry_sync") and st.button(
+            "Retry Google Sheet sync", icon=":material/sync:", key="retry_sheet_sync"
+        ):
+            recovered, message = store.retry_sync()
+            (st.success if recovered else st.error)(message)
+            if recovered:
+                st.rerun()
     else:
         if sheets_credentials_configured():
             st.caption(
