@@ -18,7 +18,7 @@ with st.container(border=True):
         st.caption(
             f"{challenge['start_utc']:%d %b %Y %H%M UTC} through {challenge['end_utc']:%d %b %Y %H%M UTC}"
         )
-        st.page_link("app_pages/leaderboards.py", label="View challenge leaderboard", icon=":material/leaderboard:")
+        st.page_link("app_pages/challenges.py", label="View challenge results", icon=":material/leaderboard:")
     elif [item for item in future if item["type"] == "sprint"]:
         next_challenge = [item for item in future if item["type"] == "sprint"][0]
         st.markdown("No weekly challenge is active.")

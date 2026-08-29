@@ -8,7 +8,7 @@ import streamlit as st
 from geopy.geocoders import Nominatim
 
 from app_support import active_challenges_for_band, get_store, require_location
-from dxcore.content import station_qualifies_for_challenge
+from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.solar import mw_propagation
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, stations_on_frequency
@@ -16,6 +16,12 @@ from modules.import_console import render_import_console
 
 
 PROPAGATION = {
+    "MW": [
+        "Groundwave / Daytime",
+        "Sunrise grayline",
+        "Sunset grayline",
+        "Skywave / Nighttime",
+    ],
     "FM": ["Local", "Tropo", "Meteor Scatter", "Sporadic E", "Aurora", "Aircraft Scatter", "Other"],
     "NWR": ["Local", "Tropo", "Meteor Scatter", "Sporadic E", "Aurora", "Aircraft Scatter", "Other"],
 }
@@ -81,6 +87,8 @@ if entry_mode == "Bulk import":
 
 active_sprints = active_challenges_for_band(band)
 frequencies = band_frequencies(band)
+challenge_filter = False
+focused_challenge: dict[str, object] | None = None
 if active_sprints:
     st.info(
         "Active challenge: "
@@ -88,10 +96,31 @@ if active_sprints:
         + ". Use the optional station-list filter to focus on qualifying targets; normal logging remains fully open.",
         icon=":material/event_available:",
     )
+    if entry_mode == "Station list":
+        focused_challenge = (
+            active_sprints[0]
+            if len(active_sprints) == 1
+            else st.selectbox(
+                "Active challenge target",
+                active_sprints,
+                format_func=lambda challenge: challenge["name"],
+                key=f"log_active_challenge_{band}",
+            )
+        )
+        challenge_filter = st.toggle(
+            "Active challenge filter",
+            value=False,
+            key=f"log_challenge_only_{band}",
+            help="When enabled, the frequency and station list move to the selected active challenge. Turn it off at any time to log other DX.",
+        )
 frequency_key = f"log_frequency_{band}"
 st.session_state.setdefault(frequency_key, frequencies[0])
 if st.session_state[frequency_key] not in frequencies:
     st.session_state[frequency_key] = frequencies[0]
+if challenge_filter and focused_challenge is not None:
+    challenge_frequencies = allowed_challenge_frequencies(focused_challenge, frequencies)
+    if challenge_frequencies and st.session_state[frequency_key] not in challenge_frequencies:
+        st.session_state[frequency_key] = challenge_frequencies[0]
 
 def move_channel(direction: int) -> None:
     st.session_state[frequency_key] = channel_step(band, float(st.session_state[frequency_key]), direction)
@@ -118,14 +147,6 @@ if entry_mode == "Station list":
         key=f"log_nearby_only_{band}",
         help="Leave this off for normal DX logging. Turn it on when you only want nearby targets.",
     )
-    challenge_filter = False
-    if active_sprints:
-        challenge_filter = st.toggle(
-            "Active challenge filter",
-            value=False,
-            key=f"log_challenge_only_{band}",
-            help="Show only stations that meet the current challenge's band, frequency, geography, and distance rules. Turn it off at any time to log other DX.",
-        )
     matches = stations_on_frequency(
         band,
         frequency,
@@ -136,7 +157,9 @@ if entry_mode == "Station list":
     if challenge_filter and not matches.empty:
         matches = matches[
             matches.apply(
-                lambda station: any(
+                lambda station: station_qualifies_for_challenge(
+                    station, focused_challenge
+                ) if focused_challenge is not None else any(
                     station_qualifies_for_challenge(station, challenge)
                     for challenge in active_sprints
                 ),
@@ -297,18 +320,30 @@ with st.container(border=True):
             reception = now
             st.caption(f"Live UTC timestamp: {reception:%Y-%m-%d %H:%M}")
 
-        if band in PROPAGATION:
+        if band == "MW":
+            suggested_propagation = mw_propagation(
+                reception, float(location["latitude"]), float(location["longitude"])
+            )
+            propagation_key = "log_prop_MW"
+            if st.session_state.get(propagation_key) not in PROPAGATION["MW"]:
+                st.session_state[propagation_key] = suggested_propagation
+            propagation = st.selectbox(
+                "Propagation mode",
+                PROPAGATION["MW"],
+                key=propagation_key,
+                persist_state="session",
+            )
+            st.caption(
+                f"Suggested from the selected QTH and reception time: {suggested_propagation}. "
+                "Change it when the recorded reception used a different propagation/daypart classification."
+            )
+        else:
             propagation = st.selectbox(
                 "Propagation mode",
                 PROPAGATION[band],
                 key=f"log_prop_{band}",
                 persist_state="session",
             )
-        else:
-            propagation = mw_propagation(
-                reception, float(location["latitude"]), float(location["longitude"])
-            )
-            st.text_input("Propagation mode (automatic)", value=propagation, disabled=True)
 
         st.session_state.setdefault("log_is_sdr", False)
         st.session_state.setdefault("log_is_portable", not bool(location["is_home"]))

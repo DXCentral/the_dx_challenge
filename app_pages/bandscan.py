@@ -9,9 +9,9 @@ from dxcore.stations import frequencies_for_band
 
 
 COLORS = {
-    "local": ("#B4232F", "#FFFFFF"),
-    "regional": ("#F7C65F", "#17110E"),
-    "open": ("#16794B", "#FFFFFF"),
+    "local": "#E24A5A",
+    "regional": "#F28C28",
+    "open": "#39C986",
 }
 
 
@@ -70,7 +70,7 @@ with st.container(horizontal=True):
 
 st.caption(
     ":red-badge[Red · station within 50 mi] "
-    ":orange-badge[Yellow · station within 200 mi] "
+    ":orange-badge[Orange · station within 200 mi] "
     ":green-badge[Green · only stations beyond 200 mi]"
 )
 
@@ -80,11 +80,11 @@ for frequency, summary in history.items():
     if frequency not in frequency_keys:
         continue
     token = str(frequency).replace(".", "_")
-    background, text_color = COLORS[str(summary["interference"])]
+    border_color = COLORS[str(summary["interference"])]
     style_rules.append(
         f".st-key-scan_{band}_{token} button {{"
-        f"background-color:{background} !important; color:{text_color} !important; "
-        f"border-color:{background} !important; font-weight:600;}}"
+        f"background-color:transparent !important; color:var(--dx-text) !important; "
+        f"border:2px solid {border_color} !important; font-weight:600;}}"
     )
 if style_rules:
     st.html(f"<style>{''.join(style_rules)}</style>")

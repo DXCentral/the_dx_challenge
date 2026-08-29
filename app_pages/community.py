@@ -19,8 +19,8 @@ with st.container(horizontal=True, vertical_alignment="center"):
 
 with st.container(border=True):
     st.subheader("Community activity")
-    st.write("Recent milestones, challenge finishes, new states/countries/grids, and opt-in shared catches will appear here.")
-    st.badge("Opt-in sharing", icon=":material/privacy_tip:", color="blue")
+    st.write("Recent aggregate milestones, challenge finishes, and new states/countries/grids will appear here.")
+    st.caption("Individual catches are not shared from this page. A personal opt-in control will be added only if individual community sharing is introduced later.")
 
 with st.container(border=True):
     st.subheader("Livestream prompts")
