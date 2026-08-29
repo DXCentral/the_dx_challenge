@@ -1,3 +1,13 @@
+### Version 1.0.0-rc6 · Sixth-round testing
+
+- Expanded Current and Previous challenge results into a full challenge-specific analytics dashboard with all-DXer counters, selectable DXer tables, maps, paths, filters, and qualifying receptions.
+- Moved challenge results off the general Leaderboards page; added filterable season and season-to-date sprint leaderboards.
+- Made the active-challenge station-list filter move directly to the selected challenge frequency while leaving normal and bulk logging unrestricted.
+- Made MW propagation/daypart editable during review and added Sunrise grayline and Sunset grayline options alongside Daytime and Nighttime.
+- Changed Bandscan distance colors to high-contrast red, orange, and green outlines.
+- Added an explicit Google Sheet retry path for locally retained writes and clarified transient sync status.
+- Removed the inactive Community opt-in badge until individual sharing is implemented.
+
 ### Version 1.0.0-rc5.1 · Location lookup correction
 
 - City/state/province lookups now validate and store latitude, longitude, and a calculated 6-character Maidenhead grid before the location is created.
