@@ -181,7 +181,7 @@ def render_bandscan_grid(user_lat=None, user_lon=None, user_handle="Operator"):
             st.info("No local targets found in databank.")
         else:
             view_nearby = nearby_df[['S_FREQ', 'S_CALL', 'S_CITY', 'Dist_From_User']].rename(columns={'S_FREQ': 'Freq', 'S_CALL': 'Call', 'S_CITY': 'City', 'Dist_From_User': 'Miles'})
-            st.dataframe(view_nearby, hide_index=True, use_container_width=True)
+            st.dataframe(view_nearby, hide_index=True, width="stretch")
 
     with col_grid:
         if band == "MW":
@@ -208,7 +208,7 @@ def render_bandscan_grid(user_lat=None, user_lon=None, user_handle="Operator"):
                     elif val.get("type") == "DX": btn_label = f"🌟 {freq_key} [{val.get('call')}]"
                     else: btn_label = f"🟢 {freq_key} [{val.get('call')}]"
 
-                    if col.button(btn_label, key=f"btn_{band}_{freq_key}", use_container_width=True):
+                    if col.button(btn_label, key=f"btn_{band}_{freq_key}", width="stretch"):
                         st.session_state[f"active_edit_{band}"] = freq_key
 
     # --- 3. The Auto-Fill & Dual-Log Drawer ---
@@ -228,7 +228,7 @@ def render_bandscan_grid(user_lat=None, user_lon=None, user_handle="Operator"):
                 
                 for _, match in matches.iterrows():
                     btn_label = f"📡 {match['S_CALL']} — {match['S_CITY']}, {match['S_STATE']} ({match['Dist_From_User']:.1f} mi)"
-                    if st.button(btn_label, key=f"auto_{band}_{active_freq}_{match['S_CALL']}", use_container_width=True):
+                    if st.button(btn_label, key=f"auto_{band}_{active_freq}_{match['S_CALL']}", width="stretch"):
                         
                         station_type = "DX" if (band == "MW" and match['Dist_From_User'] >= MW_LOCAL_CUTOFF_MILES) else "LOCAL"
                         
