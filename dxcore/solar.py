@@ -50,6 +50,11 @@ def mw_propagation(reception_utc: datetime, latitude: float, longitude: float) -
         return "MW automatic — polar day/night review"
     if sunset <= sunrise:
         sunset += timedelta(days=1)
-    if sunrise <= reception_utc <= sunset:
+    grayline = timedelta(minutes=60)
+    if sunrise - grayline <= reception_utc <= sunrise + grayline:
+        return "Sunrise grayline"
+    if sunset - grayline <= reception_utc <= sunset + grayline:
+        return "Sunset grayline"
+    if sunrise + grayline < reception_utc < sunset - grayline:
         return "Groundwave / Daytime"
     return "Skywave / Nighttime"

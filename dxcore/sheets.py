@@ -154,6 +154,7 @@ class HybridStore:
         self.local = local
         self.mirror = mirror
         self.sync_error = ""
+        self._pending_sync: dict[str, set[str]] = {}
         try:
             self.mirror.bootstrap(self.local)
         except Exception as error:  # The UI reports degraded persistence.
@@ -167,13 +168,49 @@ class HybridStore:
     def sync_enabled(self) -> bool:
         return True
 
+    @property
+    def pending_sync_count(self) -> int:
+        return sum(len(row_ids) for row_ids in self._pending_sync.values())
+
     def _sync(self, sheet_name: str, rows: list[dict[str, object]]) -> None:
+        key = SHEET_SCHEMAS[sheet_name][0]
+        row_ids = {
+            str(row.get(key, "")).strip()
+            for row in rows
+            if str(row.get(key, "")).strip()
+        }
         try:
             self.mirror.upsert_rows(sheet_name, rows)
-            self.sync_error = ""
+            pending = self._pending_sync.get(sheet_name, set())
+            pending.difference_update(row_ids)
+            if not pending:
+                self._pending_sync.pop(sheet_name, None)
+            self.sync_error = "" if not self.pending_sync_count else "Changes are waiting to be resynced."
         except Exception as error:
             LOGGER.exception("Google Sheet write failed for %s", sheet_name)
+            self._pending_sync.setdefault(sheet_name, set()).update(row_ids)
             self.sync_error = f"{type(error).__name__}: {error}"
+
+    def retry_sync(self) -> tuple[bool, str]:
+        """Retry only records retained after failed writes, plus a small health check."""
+        try:
+            if not self._pending_sync:
+                self.mirror.upsert_rows("Users", self.local.sheet_rows("Users"))
+            else:
+                for sheet_name, row_ids in list(self._pending_sync.items()):
+                    rows = [
+                        row
+                        for row_id in row_ids
+                        if (row := self.local.sheet_row(sheet_name, row_id)) is not None
+                    ]
+                    self.mirror.upsert_rows(sheet_name, rows)
+                self._pending_sync.clear()
+            self.sync_error = ""
+            return True, "Google Sheet sync is durable again."
+        except Exception as error:
+            LOGGER.exception("Google Sheet retry failed")
+            self.sync_error = f"{type(error).__name__}: {error}"
+            return False, "Google Sheet sync is still unavailable. Your local cache is unchanged."
 
     def _sync_one(self, sheet_name: str, row_id: str) -> None:
         row = self.local.sheet_row(sheet_name, row_id)

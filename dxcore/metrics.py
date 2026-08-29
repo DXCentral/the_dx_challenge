@@ -45,6 +45,29 @@ def canonical_daypart(value: object) -> str:
     return text
 
 
+def canonical_propagation(value: object) -> str:
+    text = "" if pd.isna(value) else str(value).strip()
+    lowered = text.casefold()
+    if "groundwave" in lowered or "daytime" in lowered:
+        return "Groundwave"
+    if "skywave" in lowered or "nighttime" in lowered:
+        return "Skywave"
+    aliases = {
+        "es": "Sporadic E",
+        "sporadic e": "Sporadic E",
+        "tr": "Tropo",
+        "tropo": "Tropo",
+        "ms": "Meteor Scatter",
+        "meteor scatter": "Meteor Scatter",
+        "au": "Aurora",
+        "aurora": "Aurora",
+        "as": "Aircraft Scatter",
+        "aircraft scatter": "Aircraft Scatter",
+        "local": "Local",
+    }
+    return aliases.get(lowered, text)
+
+
 def challenge_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
     if logs.empty:
         return pd.DataFrame(columns=["user_id", "score"])

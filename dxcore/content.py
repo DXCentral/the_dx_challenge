@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from dxcore.config import CONTENT_DIR
-from dxcore.metrics import canonical_daypart
+from dxcore.metrics import canonical_daypart, canonical_propagation
 
 
 CHALLENGE_FILE = CONTENT_DIR / "challenge_schedule.csv"
@@ -60,6 +60,14 @@ def frequency_allowed(spec: object, frequency: float) -> bool:
         elif abs(float(item) - frequency) < 0.001:
             return True
     return False
+
+
+def allowed_challenge_frequencies(
+    challenge: dict[str, object], frequencies: list[float]
+) -> list[float]:
+    rules = challenge.get("rules", {})
+    spec = rules.get("frequencies", "ALL") if isinstance(rules, dict) else "ALL"
+    return [value for value in frequencies if frequency_allowed(spec, value)]
 
 
 def load_challenges() -> list[dict[str, object]]:
@@ -166,12 +174,16 @@ def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, objec
     if not challenge["start_utc"] <= reception <= challenge["end_utc"]:
         return False
     rules = challenge["rules"]
-    propagation = _text(value.get("propagation")).casefold()
-    modes = {item.casefold() for item in rules.get("propagation_modes", [])}
+    raw_propagation = value.get("propagation")
+    propagation = canonical_propagation(raw_propagation).casefold()
+    modes = {
+        canonical_propagation(item).casefold()
+        for item in rules.get("propagation_modes", [])
+    }
     dayparts = {canonical_daypart(item).casefold() for item in rules.get("dayparts", [])}
     if modes and propagation not in modes:
         return False
-    if dayparts and canonical_daypart(propagation).casefold() not in dayparts:
+    if dayparts and canonical_daypart(raw_propagation).casefold() not in dayparts:
         return False
     return True
 
