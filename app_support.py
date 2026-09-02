@@ -51,8 +51,30 @@ def get_store() -> LocalStore:
 
 
 @st.cache_data
-def get_station_data() -> pd.DataFrame:
+def get_base_station_data() -> pd.DataFrame:
     return load_stations()
+
+
+def get_station_data() -> pd.DataFrame:
+    """Return licensed source lists plus administrator-approved station additions."""
+    base = get_base_station_data().copy()
+    overrides = get_store().station_overrides()
+    if overrides.empty:
+        return base
+    columns = [
+        "station_id", "band", "frequency", "call", "city", "region", "country",
+        "county", "grid", "latitude", "longitude",
+    ]
+    overrides = overrides[columns].copy()
+    overrides["frequency"] = pd.to_numeric(overrides["frequency"], errors="coerce")
+    overrides["latitude"] = pd.to_numeric(overrides["latitude"], errors="coerce")
+    overrides["longitude"] = pd.to_numeric(overrides["longitude"], errors="coerce")
+    overrides = overrides.dropna(subset=["frequency", "latitude", "longitude"])
+    return (
+        pd.concat([base, overrides], ignore_index=True)
+        .drop_duplicates("station_id", keep="last")
+        .reset_index(drop=True)
+    )
 
 
 def authentication_configured() -> bool:
