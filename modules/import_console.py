@@ -16,7 +16,7 @@ from dxcore.importers import (
     mapping_for_format,
     normalize_import,
     read_upload,
-    resolve_review_station,
+    resolve_matching_review_rows,
     unlisted_station_id,
 )
 
@@ -64,7 +64,8 @@ def _mapping_widgets(
     )
     with expander:
         st.caption(
-            "Combined date/time takes precedence when mapped. Otherwise both reception date and reception time are required."
+            "Combined date/time takes precedence when mapped. Otherwise both reception date and reception time are required. "
+            "Generic form-submission Timestamp columns are intentionally left unmapped for Custom imports."
         )
         fields = list(MAPPING_LABELS)
         for start in range(0, len(fields), 3):
@@ -179,12 +180,16 @@ def _review_held_rows(
                 if station is None:
                     st.error("That station-list candidate is no longer available.")
                 else:
-                    st.session_state[review_key] = resolve_review_station(
+                    resolved, count = resolve_matching_review_rows(
                         review,
                         row_index,
                         station,
                         location=location,
                         existing_logs=get_store().logs(st.session_state.user["user_id"]),
+                    )
+                    st.session_state[review_key] = resolved
+                    st.session_state[f"{review_key}_resolution_notice"] = (
+                        f"Applied the canonical station to {count:,} matching held row(s)."
                     )
                     st.rerun()
         else:
@@ -249,13 +254,17 @@ def _review_held_rows(
                         "latitude": latitude,
                         "longitude": longitude,
                     }
-                    st.session_state[review_key] = resolve_review_station(
+                    resolved, count = resolve_matching_review_rows(
                         review,
                         row_index,
                         station,
                         location=location,
                         existing_logs=get_store().logs(st.session_state.user["user_id"]),
                         unlisted=True,
+                    )
+                    st.session_state[review_key] = resolved
+                    st.session_state[f"{review_key}_resolution_notice"] = (
+                        f"Approved {count:,} matching held row(s) as the same unlisted station."
                     )
                     st.rerun()
 
@@ -333,18 +342,23 @@ def render_import_console(location: dict[str, object]) -> None:
                 "Day / month / year": "DMY",
                 "Year / month / day": "YMD",
             }[date_label]
+            time_protocol_key = f"bulk_import_time_protocol_{file_token}"
             time_label = first[1].selectbox(
                 "Timestamp protocol",
                 ["UTC", "Local time"],
-                key=f"bulk_import_time_protocol_{file_token}",
+                key=time_protocol_key,
             )
             time_protocol = "UTC" if time_label == "UTC" else "Local"
         browser_zone = str(getattr(st.context, "timezone", "") or "America/Chicago")
+        timezone_key = f"bulk_import_timezone_{file_token}"
+        protocol_state_key = f"{timezone_key}_protocol"
+        if st.session_state.get(protocol_state_key) != time_protocol:
+            st.session_state[timezone_key] = "UTC" if time_protocol == "UTC" else browser_zone
+            st.session_state[protocol_state_key] = time_protocol
         timezone_name = first[2].text_input(
             "IANA time zone",
-            value="UTC" if time_protocol == "UTC" else browser_zone,
             disabled=time_protocol == "UTC",
-            key=f"bulk_import_timezone_{file_token}",
+            key=timezone_key,
             help="Examples: America/Chicago, America/New_York, Europe/London.",
         )
         second = st.columns(4)
@@ -374,6 +388,20 @@ def render_import_console(location: dict[str, object]) -> None:
         )
 
     problems = _validate_mapping(mapping)
+    generic_timestamp = (
+        source_format == "Custom"
+        and str(mapping.get("timestamp", "")).strip().casefold() == "timestamp"
+    )
+    timestamp_confirmed = True
+    if generic_timestamp:
+        st.warning(
+            "The mapped column is named only 'Timestamp'. In Google Forms exports this is usually the form-submission time, "
+            "not the reception time. Map the separate reception date/time fields unless this column truly contains reception times."
+        )
+        timestamp_confirmed = st.checkbox(
+            "I confirm that Timestamp contains the reception date and time.",
+            key=f"bulk_import_generic_timestamp_confirm_{file_token}",
+        )
     if problems:
         for problem in problems:
             st.warning(problem)
@@ -384,6 +412,7 @@ def render_import_console(location: dict[str, object]) -> None:
         "Build reviewed preview",
         icon=":material/rule:",
         type="primary",
+        disabled=not timestamp_confirmed,
         key=f"bulk_import_process_{file_token}",
     ):
         store = get_store()
@@ -416,6 +445,9 @@ def render_import_console(location: dict[str, object]) -> None:
     review = st.session_state.get(review_key)
     if not isinstance(review, pd.DataFrame):
         return
+
+    if resolution_notice := st.session_state.pop(f"{review_key}_resolution_notice", None):
+        st.success(resolution_notice)
 
     st.subheader("Import review")
     _status_metrics(review)
