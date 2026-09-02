@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pandas as pd
 
 from dxcore.geo import haversine_miles
+from dxcore.propagation import normalize_mw_propagation
 from dxcore.solar import mw_propagation
 
 
@@ -71,7 +72,10 @@ FIELD_SUGGESTIONS: dict[str, tuple[str, ...]] = {
     "band": ("band",),
     "frequency": ("frequency", "freq", "mhz", "khz"),
     "call": ("callsign", "call sign", "call", "station", "program"),
-    "timestamp": ("timestamp", "date time", "datetime", "utc helper"),
+    # A generic Google Forms "Timestamp" is normally the form-submission time,
+    # not the reception time. WLogger maps its known Timestamp through its preset;
+    # custom imports must explicitly choose a generic Timestamp if it is relevant.
+    "timestamp": ("reception timestamp", "reception date time", "date time", "datetime", "utc helper"),
     "date": ("utc date", "date of reception", "reception date", "date"),
     "time": ("utc time", "time of reception", "reception time", "time", "utc"),
     "city": ("city of license", "station city", "location", "city"),
@@ -393,7 +397,7 @@ def _bool(value: object, default: bool) -> bool:
 def normalize_propagation(value: object, band: str) -> str:
     token = normalize_token(value)
     if band == "MW":
-        return "Other"
+        return normalize_mw_propagation(value) or "Other"
     aliases = {
         "ES": "Sporadic E",
         "SPORADICE": "Sporadic E",
@@ -628,6 +632,50 @@ def resolve_review_station(
     return result
 
 
+def resolve_matching_review_rows(
+    review: pd.DataFrame,
+    row_index: object,
+    station: dict[str, object],
+    *,
+    location: dict[str, object],
+    existing_logs: pd.DataFrame,
+    unlisted: bool = False,
+) -> tuple[pd.DataFrame, int]:
+    """Apply one explicit station decision to every matching held source row."""
+    selected = review.loc[row_index]
+
+    def identity(row: pd.Series) -> tuple[object, ...]:
+        return (
+            str(row.get("band", "")).upper(),
+            round(float(row.get("frequency", 0)), 3),
+            normalize_call(row.get("source_station", "")),
+            normalize_token(row.get("source_city", "")),
+            normalize_token(row.get("source_region", "")),
+            normalize_token(row.get("source_country", "")),
+        )
+
+    target = identity(selected)
+    candidates = [
+        index
+        for index, row in review.iterrows()
+        if str(row.get("status", "")) == "Needs review" and identity(row) == target
+    ]
+    candidates.sort(
+        key=lambda index: pd.to_datetime(review.at[index, "reception_utc"], utc=True)
+    )
+    result = review.copy()
+    for index in candidates:
+        result = resolve_review_station(
+            result,
+            index,
+            station,
+            location=location,
+            existing_logs=existing_logs,
+            unlisted=unlisted,
+        )
+    return result, len(candidates)
+
+
 def unlisted_station_id(
     band: str, frequency: float, call: str, city: str, region: str, country: str
 ) -> str:
@@ -726,7 +774,9 @@ def normalize_import(
             source_county = str(_value(row, mapping, "county")).strip()
             source_grid = str(_value(row, mapping, "grid")).strip().upper()
             if band == "MW":
-                source_propagation = mw_propagation(
+                source_propagation = normalize_mw_propagation(
+                    _value(row, mapping, "propagation")
+                ) or mw_propagation(
                     reception,
                     float(location["latitude"]),
                     float(location["longitude"]),
@@ -792,7 +842,9 @@ def normalize_import(
                 batch_times.setdefault(station_id, []).append(reception)
 
             if band == "MW":
-                propagation = mw_propagation(
+                propagation = normalize_mw_propagation(
+                    _value(row, mapping, "propagation")
+                ) or mw_propagation(
                     reception,
                     float(location["latitude"]),
                     float(location["longitude"]),

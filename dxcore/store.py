@@ -11,7 +11,7 @@ from typing import Iterator
 import pandas as pd
 
 from dxcore.config import CONTENT_DIR, LOCAL_DB_PATH
-from dxcore.geo import latlon_to_grid, valid_coordinates, valid_grid
+from dxcore.geo import haversine_miles, latlon_to_grid, valid_coordinates, valid_grid
 from dxcore.schema import SHEET_SCHEMAS
 
 
@@ -21,6 +21,7 @@ SHEET_TABLES = {
     "Logging Entries": "logs",
     "Bandscan": "bandscan",
     "Import Batches": "import_batches",
+    "Station Overrides": "station_overrides",
     "Announcements": "announcements",
     "Challenges": "challenges",
     "Support Tickets": "support_tickets",
@@ -186,6 +187,22 @@ class LocalStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_import_batches_user
                     ON import_batches(user_id, created_utc);
+                CREATE TABLE IF NOT EXISTS station_overrides (
+                    station_id TEXT PRIMARY KEY,
+                    band TEXT NOT NULL,
+                    frequency REAL NOT NULL,
+                    call TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    country TEXT NOT NULL,
+                    county TEXT NOT NULL,
+                    grid TEXT NOT NULL,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    source_log_id TEXT NOT NULL,
+                    approved_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
                 """
             )
             existing_user_columns = {
@@ -796,6 +813,88 @@ class LocalStore:
             )
         return True, "Reception updated."
 
+    def admin_update_log(
+        self, log_id: str, values: dict[str, object]
+    ) -> tuple[bool, str]:
+        """Edit a reviewed reception without changing its owner or provenance."""
+        allowed = {
+            "station_id", "band", "frequency", "call", "station_city",
+            "station_region", "station_country", "station_county", "station_grid",
+            "station_latitude", "station_longitude", "reception_utc", "propagation",
+            "is_sdr", "is_portable", "notes",
+        }
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if not updates:
+            return False, "No editable fields were supplied."
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM logs WHERE log_id=? AND deleted_utc=''", (log_id,)
+            ).fetchone()
+            if existing is None:
+                return False, "Reception was not found."
+            merged = {**dict(existing), **updates}
+            required = ["station_id", "band", "call", "station_city", "station_country"]
+            if any(not str(merged.get(field, "")).strip() for field in required):
+                return False, "Station ID, band, call/name, city, and country are required."
+            try:
+                merged["frequency"] = float(merged["frequency"])
+                reception = datetime.fromisoformat(
+                    str(merged["reception_utc"]).replace("Z", "+00:00")
+                )
+            except (TypeError, ValueError):
+                return False, "Frequency and reception UTC must be valid."
+            if reception.tzinfo is None:
+                reception = reception.replace(tzinfo=timezone.utc)
+            reception_iso = iso_utc(reception)
+            duplicate = connection.execute(
+                """
+                SELECT log_id, reception_utc FROM logs
+                WHERE user_id=? AND location_id=? AND station_id=?
+                  AND log_id<>? AND deleted_utc=''
+                  AND reception_utc BETWEEN ? AND ?
+                ORDER BY reception_utc LIMIT 1
+                """,
+                (
+                    existing["user_id"], existing["location_id"], merged["station_id"],
+                    log_id, iso_utc(reception - timedelta(minutes=5)),
+                    iso_utc(reception + timedelta(minutes=5)),
+                ),
+            ).fetchone()
+            if duplicate:
+                return False, f"That change would duplicate a log within five minutes ({duplicate['reception_utc']})."
+
+            latitude = merged.get("station_latitude", "")
+            longitude = merged.get("station_longitude", "")
+            if valid_coordinates(latitude, longitude):
+                latitude = float(latitude)
+                longitude = float(longitude)
+                merged["station_latitude"] = latitude
+                merged["station_longitude"] = longitude
+                if not valid_grid(str(merged.get("station_grid", ""))):
+                    merged["station_grid"] = latlon_to_grid(latitude, longitude)
+                qth = connection.execute(
+                    "SELECT latitude, longitude FROM locations WHERE location_id=?",
+                    (existing["location_id"],),
+                ).fetchone()
+                if qth is not None:
+                    merged["distance_miles"] = round(
+                        haversine_miles(
+                            float(qth["latitude"]), float(qth["longitude"]), latitude, longitude
+                        ),
+                        1,
+                    )
+            merged["reception_utc"] = reception_iso
+            updates = {key: merged[key] for key in allowed if key in merged}
+            if "distance_miles" in merged:
+                updates["distance_miles"] = merged["distance_miles"]
+            updates["updated_utc"] = iso_utc()
+            assignments = ", ".join(f"{column}=?" for column in updates)
+            connection.execute(
+                f"UPDATE logs SET {assignments}, revision=revision+1 WHERE log_id=?",
+                (*updates.values(), log_id),
+            )
+        return True, "Reception updated by the administrator."
+
     def delete_log(self, user_id: str, log_id: str) -> tuple[bool, str]:
         with self.connect() as connection:
             result = connection.execute(
@@ -823,11 +922,73 @@ class LocalStore:
             return pd.read_sql_query(
                 """
                 SELECT * FROM logs
-                WHERE deleted_utc='' AND station_review_status<>''
-                ORDER BY updated_utc DESC
+                WHERE deleted_utc=''
+                  AND station_review_status IN ('Pending', 'Needs database addition')
+                ORDER BY reception_utc ASC, updated_utc ASC
                 """,
                 connection,
             )
+
+    def station_overrides(self) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT * FROM station_overrides ORDER BY band, frequency, call",
+                connection,
+            )
+
+    def promote_station_override(
+        self, log_id: str
+    ) -> tuple[bool, str, str]:
+        """Promote one reviewed unlisted station and resolve its related reports."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM logs WHERE log_id=? AND deleted_utc=''", (log_id,)
+            ).fetchone()
+            if row is None:
+                return False, "Reception was not found.", ""
+            required = [row["station_id"], row["band"], row["call"], row["station_city"], row["station_country"]]
+            if any(not str(value).strip() for value in required):
+                return False, "Complete the station ID, band, call/name, city, and country first.", ""
+            if not valid_coordinates(row["station_latitude"], row["station_longitude"]):
+                return False, "Add valid station latitude and longitude before promoting this station.", ""
+            latitude = float(row["station_latitude"])
+            longitude = float(row["station_longitude"])
+            grid = str(row["station_grid"]).strip().upper()
+            if not valid_grid(grid):
+                grid = latlon_to_grid(latitude, longitude)
+            now = iso_utc()
+            existing = connection.execute(
+                "SELECT approved_utc FROM station_overrides WHERE station_id=?",
+                (row["station_id"],),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO station_overrides(
+                    station_id,band,frequency,call,city,region,country,county,grid,
+                    latitude,longitude,source_log_id,approved_utc,updated_utc
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(station_id) DO UPDATE SET
+                    band=excluded.band, frequency=excluded.frequency, call=excluded.call,
+                    city=excluded.city, region=excluded.region, country=excluded.country,
+                    county=excluded.county, grid=excluded.grid, latitude=excluded.latitude,
+                    longitude=excluded.longitude, source_log_id=excluded.source_log_id,
+                    updated_utc=excluded.updated_utc
+                """,
+                (
+                    row["station_id"], row["band"], float(row["frequency"]), row["call"],
+                    row["station_city"], row["station_region"], row["station_country"],
+                    row["station_county"], grid, latitude, longitude, log_id,
+                    existing["approved_utc"] if existing else now, now,
+                ),
+            )
+            resolved = connection.execute(
+                """
+                UPDATE logs SET station_review_status='Reviewed', updated_utc=?, revision=revision+1
+                WHERE station_id=? AND deleted_utc='' AND station_review_status<>''
+                """,
+                (now, row["station_id"]),
+            ).rowcount
+        return True, f"Station added to the managed database; {resolved} related review report(s) resolved.", str(row["station_id"])
 
     def update_station_review_status(
         self, log_id: str, status: str

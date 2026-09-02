@@ -81,6 +81,11 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "normalized_json",
         "message",
     ],
+    "Station Overrides": [
+        "station_id", "band", "frequency", "call", "city", "region", "country",
+        "county", "grid", "latitude", "longitude", "source_log_id",
+        "approved_utc", "updated_utc",
+    ],
     "Announcements": [
         "announcement_id", "title", "body", "start_utc", "end_utc", "active",
         "published_utc", "updated_utc",

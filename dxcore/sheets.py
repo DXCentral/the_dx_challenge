@@ -333,6 +333,14 @@ class HybridStore:
             self._sync_one("Logging Entries", log_id)
         return updated, message
 
+    def admin_update_log(
+        self, log_id: str, values: dict[str, object]
+    ) -> tuple[bool, str]:
+        updated, message = self.local.admin_update_log(log_id, values)
+        if updated:
+            self._sync_one("Logging Entries", log_id)
+        return updated, message
+
     def delete_log(self, user_id: str, log_id: str) -> tuple[bool, str]:
         deleted, message = self.local.delete_log(user_id, log_id)
         if deleted:
@@ -346,6 +354,17 @@ class HybridStore:
         if updated:
             self._sync_one("Logging Entries", log_id)
         return updated, message
+
+    def promote_station_override(
+        self, log_id: str
+    ) -> tuple[bool, str, str]:
+        promoted, message, station_id = self.local.promote_station_override(log_id)
+        if promoted:
+            self._sync_one("Station Overrides", station_id)
+            related = self.local.logs()
+            related = related[related["station_id"].astype(str) == station_id]
+            self._sync("Logging Entries", related.to_dict("records"))
+        return promoted, message, station_id
 
     def record_import_batch(self, **values: object) -> None:
         self.local.record_import_batch(**values)
