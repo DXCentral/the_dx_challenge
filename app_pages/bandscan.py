@@ -13,6 +13,12 @@ COLORS = {
     "regional": "#F28C28",
     "open": "#39C986",
 }
+DISTANCE_FILTERS = {
+    "All": None,
+    "Red · within 50 mi": "local",
+    "Orange · 50–200 mi": "regional",
+    "Green · beyond 200 mi": "open",
+}
 
 
 def frequency_label(band: str, value: float) -> str:
@@ -74,18 +80,43 @@ st.caption(
     ":green-badge[Green · only stations beyond 200 mi]"
 )
 
+filter_key = f"scan_distance_filter_{band}"
+st.session_state.setdefault(filter_key, "All")
+with st.container(horizontal=True, vertical_alignment="bottom"):
+    distance_filter = st.segmented_control(
+        "Filter frequency grid by distance category",
+        list(DISTANCE_FILTERS),
+        key=filter_key,
+        persist_state="session",
+    )
+    if st.button(
+        "Clear distance filter",
+        icon=":material/filter_alt_off:",
+        disabled=distance_filter == "All",
+        key=f"clear_scan_distance_{band}",
+    ):
+        st.session_state[filter_key] = "All"
+        st.rerun()
+
 style_rules: list[str] = []
 frequency_keys = {round(value, 3) for value in frequencies}
-for frequency, summary in history.items():
-    if frequency not in frequency_keys:
-        continue
+selected_level = DISTANCE_FILTERS.get(distance_filter)
+for frequency in frequency_keys:
+    summary = history.get(frequency)
     token = str(frequency).replace(".", "_")
-    border_color = COLORS[str(summary["interference"])]
-    style_rules.append(
-        f".st-key-scan_{band}_{token} button {{"
-        f"background-color:transparent !important; color:var(--dx-text) !important; "
-        f"border:2px solid {border_color} !important; font-weight:600;}}"
-    )
+    if summary:
+        border_color = COLORS[str(summary["interference"])]
+        style_rules.append(
+            f".st-key-scan_{band}_{token} button {{"
+            f"background-color:transparent !important; color:var(--dx-text) !important; "
+            f"border:2px solid {border_color} !important; font-weight:600;}}"
+        )
+    if selected_level is not None and (
+        summary is None or str(summary["interference"]) != selected_level
+    ):
+        style_rules.append(
+            f".st-key-scan_{band}_{token} {{opacity:.25; filter:grayscale(.85);}}"
+        )
 if style_rules:
     st.html(f"<style>{''.join(style_rules)}</style>")
 

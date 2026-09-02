@@ -5,6 +5,7 @@ import streamlit as st
 
 from app_support import get_store
 from dxcore.metrics import add_geography_keys
+from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_PROPAGATION_OPTIONS
 
 
 def clear_logbook_filters() -> None:
@@ -161,7 +162,19 @@ def edit_reception_dialog(record: dict[str, object]) -> None:
     with st.form(f"edit_log_{record['log_id']}"):
         reception_date = st.date_input("Reception date (UTC)", value=original.date())
         reception_time = st.time_input("Reception time (UTC)", value=original.time().replace(tzinfo=None))
-        propagation = st.text_input("Propagation mode", value=str(record["propagation"]))
+        propagation_options = (
+            MW_PROPAGATION_OPTIONS
+            if str(record["band"]).upper() == "MW"
+            else FM_NWR_PROPAGATION_OPTIONS
+        )
+        current_propagation = str(record["propagation"])
+        if current_propagation not in propagation_options:
+            propagation_options = [current_propagation, *propagation_options]
+        propagation = st.selectbox(
+            "Propagation / MW daypart",
+            propagation_options,
+            index=propagation_options.index(current_propagation),
+        )
         is_sdr = st.checkbox("Received using an SDR", value=bool(record["is_sdr"]))
         is_portable = st.checkbox("Portable operation", value=bool(record["is_portable"]))
         notes = st.text_area("Programming notes / ID details", value=str(record["notes"]))
@@ -173,7 +186,7 @@ def edit_reception_dialog(record: dict[str, object]) -> None:
             str(record["log_id"]),
             {
                 "reception_utc": reception.isoformat(),
-                "propagation": propagation.strip(),
+                "propagation": propagation,
                 "is_sdr": int(is_sdr),
                 "is_portable": int(is_portable),
                 "notes": notes.strip(),

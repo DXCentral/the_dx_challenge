@@ -39,7 +39,13 @@ with st.container(horizontal=True):
         with st.container(border=True, width=300):
             st.markdown(f"**{award}**")
             st.progress(min(count / target, 1.0), text=f"{count:,} of {target:,} unique stations")
-            st.page_link("app_pages/awards.py", label="View award details", icon=":material/military_tech:")
+            if st.button(
+                "View award details",
+                icon=":material/military_tech:",
+                key=f"home_award_{band}",
+            ):
+                st.session_state.selected_award = f"{band} · {award}"
+                st.switch_page("app_pages/awards.py")
 
 st.subheader("Announcements")
 announcements = active_announcements(store.announcements(active_only=True))

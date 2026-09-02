@@ -5,8 +5,15 @@ from datetime import date, datetime, time, timezone
 import pandas as pd
 import streamlit as st
 
-from app_support import display_names, get_store, require_admin_access
+from app_support import display_names, get_station_data, get_store, require_admin_access
 from dxcore.content import parse_frequency_spec
+from dxcore.geo import haversine_miles, latlon_to_grid
+from dxcore.metrics import canonical_daypart
+from dxcore.propagation import (
+    ALL_PROPAGATION_OPTIONS,
+    FM_NWR_PROPAGATION_OPTIONS,
+    MW_PROPAGATION_OPTIONS,
+)
 
 
 def as_datetime(value: object, fallback: datetime) -> datetime:
@@ -23,11 +30,13 @@ def as_bool(value: object) -> bool:
 
 
 @st.dialog("Confirm deletion")
-def confirm_delete(kind: str, record_id: str, label: str) -> None:
+def confirm_delete(kind: str, record_id: str, label: str, owner_id: str = "") -> None:
     st.warning(f"Delete {kind.lower()} **{label}**? This cannot be undone.")
     if st.button("Delete permanently", icon=":material/delete:", type="primary"):
         if kind == "Announcement":
             deleted, message = get_store().delete_announcement(record_id)
+        elif kind == "Reception":
+            deleted, message = get_store().delete_log(owner_id, record_id)
         else:
             deleted, message = get_store().delete_challenge(record_id)
         if deleted:
@@ -129,17 +138,23 @@ elif section == "Challenges":
     band_defaults = [
         value for value in str(record.get("bands", "MW")).split("|") if value in {"MW", "FM", "NWR"}
     ] or ["MW"]
-    propagation_options = [
-        "Local", "Groundwave", "Skywave", "Tropo", "Meteor Scatter", "Sporadic E",
-        "Aurora", "Aircraft Scatter", "Other",
-    ]
+    propagation_options = ALL_PROPAGATION_OPTIONS
+    legacy_daypart_labels = {
+        "Daytime": "Groundwave / Daytime",
+        "Sunrise grayline": "Sunrise grayline",
+        "Sunset grayline": "Sunset grayline",
+        "Nighttime": "Skywave / Nighttime",
+    }
+    stored_propagation = str(record.get("propagation_modes", "")).split("|")
+    stored_dayparts = str(record.get("dayparts", "")).split("|")
     propagation_defaults = [
-        value for value in str(record.get("propagation_modes", "")).split("|") if value in propagation_options
+        value for value in [
+            *stored_propagation,
+            *(legacy_daypart_labels.get(value, value) for value in stored_dayparts),
+        ]
+        if value in propagation_options
     ]
-    daypart_options = ["Daytime", "Sunrise grayline", "Sunset grayline", "Nighttime"]
-    daypart_defaults = [
-        value for value in str(record.get("dayparts", "")).split("|") if value in daypart_options
-    ]
+    propagation_defaults = list(dict.fromkeys(propagation_defaults))
     with st.form(f"admin_challenge_{selected_id}"):
         name = st.text_input("Challenge name", value=str(record.get("challenge_name", "")), max_chars=160)
         challenge_type = st.segmented_control(
@@ -183,9 +198,16 @@ elif section == "Challenges":
             "Maximum distance (miles)", value=str(record.get("max_distance", ""))
         )
         propagation_modes = st.multiselect(
-            "Propagation modes", propagation_options, default=propagation_defaults
+            "Propagation modes / MW dayparts",
+            propagation_options,
+            default=propagation_defaults,
+            help="MW Sunrise, Daytime, Sunset, and Nighttime choices live here with the FM/NWR propagation modes.",
         )
-        dayparts = st.multiselect("MW dayparts", daypart_options, default=daypart_defaults)
+        dayparts = [
+            canonical_daypart(value)
+            for value in propagation_modes
+            if value in MW_PROPAGATION_OPTIONS
+        ]
         scoring_method = st.selectbox(
             "Leaderboard scoring",
             [
@@ -311,21 +333,191 @@ else:
         names = display_names()
         reviews = reviews.copy()
         reviews["DXer"] = reviews["user_id"].map(lambda value: names.get(str(value), "DXer"))
+        reviews["Related reports"] = reviews.groupby("station_id")["log_id"].transform("size")
+        reviews = reviews.sort_values(["call", "frequency", "reception_utc", "log_id"])
+        st.caption(
+            "Reception UTC is shown so repeated reports can be reviewed chronologically. "
+            "Adding one station to the managed database resolves every related report with the same station ID."
+        )
         st.dataframe(
             reviews[
-                ["log_id", "DXer", "band", "frequency", "call", "station_city", "station_region", "station_country", "source", "station_review_status"]
+                [
+                    "log_id", "DXer", "reception_utc", "band", "frequency", "call",
+                    "station_city", "station_region", "station_country", "source",
+                    "Related reports", "station_review_status",
+                ]
             ],
             hide_index=True,
+            column_config={
+                "reception_utc": st.column_config.DatetimeColumn(
+                    "Reception (UTC)", format="YYYY-MM-DD HH:mm"
+                ),
+            },
         )
         ids = reviews["log_id"].astype(str).tolist()
         selected_id = st.selectbox(
             "Reception to review",
             ids,
             format_func=lambda value: (
-                lambda row: f"{row['call']} · {row['frequency']} · {row['station_city']}, {row['station_region']}"
+                lambda row: (
+                    f"{row['reception_utc']} · {row['call']} · {row['frequency']} · "
+                    f"{row['station_city']}, {row['station_region']} · {row['DXer']}"
+                )
             )(reviews[reviews["log_id"] == value].iloc[0]),
         )
         record = reviews[reviews["log_id"] == selected_id].iloc[0]
+        related = reviews[reviews["station_id"].astype(str) == str(record["station_id"])]
+        st.caption(
+            f"{len(related):,} related review report(s) · earliest reception "
+            f"{related['reception_utc'].min()}"
+        )
+        if st.button(
+            "Delete selected reception",
+            icon=":material/delete:",
+            help="Use this for a later duplicate or an invalid report. The deletion is synchronized to the Google Sheet.",
+        ):
+            confirm_delete(
+                "Reception",
+                selected_id,
+                f"{record['reception_utc']} · {record['call']} · {record['frequency']}",
+                str(record["user_id"]),
+            )
+
+        station_data = get_station_data()
+        candidates = station_data[
+            station_data["band"].astype(str).str.upper().eq(str(record["band"]).upper())
+        ].copy()
+        try:
+            tolerance = 0.11 if str(record["band"]).upper() == "MW" else 0.051
+            candidates = candidates[
+                (pd.to_numeric(candidates["frequency"], errors="coerce") - float(record["frequency"])).abs()
+                <= tolerance
+            ]
+        except (TypeError, ValueError):
+            candidates = candidates.iloc[0:0]
+        exact_call = candidates[
+            candidates["call"].astype(str).str.casefold() == str(record["call"]).casefold()
+        ]
+        if not exact_call.empty:
+            candidates = exact_call
+        candidates = candidates.sort_values(["frequency", "call", "city"]).head(100)
+        candidate_records = {
+            str(row["station_id"]): row for row in candidates.to_dict("records")
+        }
+        candidate_options = ["__current__", *candidate_records]
+        reception = as_datetime(record["reception_utc"], datetime.now(timezone.utc))
+        propagation_options = (
+            MW_PROPAGATION_OPTIONS
+            if str(record["band"]).upper() == "MW"
+            else FM_NWR_PROPAGATION_OPTIONS
+        )
+        current_propagation = str(record["propagation"])
+        if current_propagation not in propagation_options:
+            propagation_options = [current_propagation, *propagation_options]
+
+        with st.form(f"admin_edit_reception_{selected_id}"):
+            st.markdown("**Administrator reception editor**")
+            canonical_id = st.selectbox(
+                "Canonical station match (optional)",
+                candidate_options,
+                format_func=lambda value: (
+                    "Keep and edit the current station"
+                    if value == "__current__"
+                    else (
+                        lambda station: (
+                            f"{station['call']} · {station['frequency']} · "
+                            f"{station['city']}, {station['region']}, {station['country']}"
+                        )
+                    )(candidate_records[value])
+                ),
+                help="Choosing a canonical match replaces the uploaded station fields when you save.",
+            )
+            columns = st.columns(3)
+            band_value = columns[0].selectbox(
+                "Band", ["MW", "FM", "NWR"],
+                index=["MW", "FM", "NWR"].index(str(record["band"]).upper()),
+            )
+            frequency_value = columns[1].number_input(
+                "Frequency", value=float(record["frequency"]), step=0.001, format="%.3f"
+            )
+            call_value = columns[2].text_input("Call / station name", value=str(record["call"]))
+            columns = st.columns(3)
+            city_value = columns[0].text_input("Station city", value=str(record["station_city"]))
+            region_value = columns[1].text_input("State / province", value=str(record["station_region"]))
+            country_value = columns[2].text_input("Country", value=str(record["station_country"]))
+            columns = st.columns(3)
+            county_value = columns[0].text_input("County / parish", value=str(record["station_county"]))
+            grid_value = columns[1].text_input("Station grid", value=str(record["station_grid"]))
+            propagation_value = columns[2].selectbox(
+                "Propagation / MW daypart",
+                propagation_options,
+                index=propagation_options.index(current_propagation),
+            )
+            columns = st.columns(2)
+            latitude_value = columns[0].text_input(
+                "Station latitude", value=str(record["station_latitude"])
+            )
+            longitude_value = columns[1].text_input(
+                "Station longitude", value=str(record["station_longitude"])
+            )
+            columns = st.columns(2)
+            reception_date = columns[0].date_input("Reception date (UTC)", value=reception.date())
+            reception_time = columns[1].time_input(
+                "Reception time (UTC)", value=reception.time().replace(tzinfo=None)
+            )
+            flags = st.columns(2)
+            is_sdr = flags[0].checkbox("Received using an SDR", value=bool(record["is_sdr"]))
+            is_portable = flags[1].checkbox("Portable operation", value=bool(record["is_portable"]))
+            notes = st.text_area("Notes", value=str(record["notes"]))
+            save_reception = st.form_submit_button(
+                "Save reception corrections", icon=":material/edit:", type="primary"
+            )
+        if save_reception:
+            selected_station = candidate_records.get(canonical_id)
+            if selected_station:
+                station_values = {
+                    "station_id": selected_station["station_id"],
+                    "band": selected_station["band"],
+                    "frequency": selected_station["frequency"],
+                    "call": selected_station["call"],
+                    "station_city": selected_station["city"],
+                    "station_region": selected_station["region"],
+                    "station_country": selected_station["country"],
+                    "station_county": selected_station["county"],
+                    "station_grid": selected_station["grid"],
+                    "station_latitude": selected_station["latitude"],
+                    "station_longitude": selected_station["longitude"],
+                }
+            else:
+                station_values = {
+                    "station_id": record["station_id"],
+                    "band": band_value,
+                    "frequency": frequency_value,
+                    "call": call_value.strip(),
+                    "station_city": city_value.strip(),
+                    "station_region": region_value.strip(),
+                    "station_country": country_value.strip(),
+                    "station_county": county_value.strip(),
+                    "station_grid": grid_value.strip().upper(),
+                    "station_latitude": latitude_value.strip(),
+                    "station_longitude": longitude_value.strip(),
+                }
+            updated, message = store.admin_update_log(
+                selected_id,
+                {
+                    **station_values,
+                    "reception_utc": utc_value(reception_date, reception_time),
+                    "propagation": propagation_value,
+                    "is_sdr": is_sdr,
+                    "is_portable": is_portable,
+                    "notes": notes,
+                },
+            )
+            if updated:
+                st.session_state.admin_notice = message
+                st.rerun()
+            st.error(message)
+
         statuses = ["Pending", "Needs database addition", "Reviewed", "Dismissed"]
         status = st.selectbox(
             "Review status",
@@ -333,10 +525,17 @@ else:
             index=statuses.index(record["station_review_status"])
             if record["station_review_status"] in statuses
             else 0,
+            help="Saving 'Needs database addition' immediately adds the corrected station to the managed station database and creates or updates the private Station Overrides Sheet tab.",
         )
-        if st.button("Update station review", icon=":material/save:", type="primary"):
-            updated, message = store.update_station_review_status(selected_id, status)
+        if st.button("Save review decision", icon=":material/save:", type="primary"):
+            if status == "Needs database addition":
+                updated, message, _ = store.promote_station_override(selected_id)
+            else:
+                updated, message = store.update_station_review_status(selected_id, status)
             if updated:
                 st.session_state.admin_notice = message
                 st.rerun()
             st.error(message)
+
+        managed = store.station_overrides()
+        st.caption(f"{len(managed):,} administrator-approved station addition(s) are currently active.")

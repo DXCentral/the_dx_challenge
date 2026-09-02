@@ -7,23 +7,19 @@ import pandas as pd
 import streamlit as st
 from geopy.geocoders import Nominatim
 
-from app_support import active_challenges_for_band, get_store, require_location
+from app_support import active_challenges_for_band, get_station_data, get_store, require_location
 from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
 from dxcore.geo import haversine_miles, latlon_to_grid
+from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_PROPAGATION_OPTIONS
 from dxcore.solar import mw_propagation
-from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, stations_on_frequency
+from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
 from modules.import_console import render_import_console
 
 
 PROPAGATION = {
-    "MW": [
-        "Groundwave / Daytime",
-        "Sunrise grayline",
-        "Sunset grayline",
-        "Skywave / Nighttime",
-    ],
-    "FM": ["Local", "Tropo", "Meteor Scatter", "Sporadic E", "Aurora", "Aircraft Scatter", "Other"],
-    "NWR": ["Local", "Tropo", "Meteor Scatter", "Sporadic E", "Aurora", "Aircraft Scatter", "Other"],
+    "MW": MW_PROPAGATION_OPTIONS,
+    "FM": FM_NWR_PROPAGATION_OPTIONS,
+    "NWR": FM_NWR_PROPAGATION_OPTIONS,
 }
 
 
@@ -114,8 +110,11 @@ if active_sprints:
             help="When enabled, the frequency and station list move to the selected active challenge. Turn it off at any time to log other DX.",
         )
 frequency_key = f"log_frequency_{band}"
+frequency_options: list[float | str] = (
+    ["All", *frequencies] if entry_mode == "Station list" else frequencies
+)
 st.session_state.setdefault(frequency_key, frequencies[0])
-if st.session_state[frequency_key] not in frequencies:
+if st.session_state[frequency_key] not in frequency_options:
     st.session_state[frequency_key] = frequencies[0]
 if challenge_filter and focused_challenge is not None:
     challenge_frequencies = allowed_challenge_frequencies(focused_challenge, frequencies)
@@ -123,19 +122,29 @@ if challenge_filter and focused_challenge is not None:
         st.session_state[frequency_key] = challenge_frequencies[0]
 
 def move_channel(direction: int) -> None:
-    st.session_state[frequency_key] = channel_step(band, float(st.session_state[frequency_key]), direction)
+    current = st.session_state[frequency_key]
+    if current == "All":
+        st.session_state[frequency_key] = frequencies[0 if direction > 0 else -1]
+    else:
+        st.session_state[frequency_key] = channel_step(band, float(current), direction)
 
 with st.container(horizontal=True, vertical_alignment="bottom"):
-    st.button("Previous", icon=":material/skip_previous:", on_click=move_channel, args=(-1,))
+    st.button(
+        "Previous", icon=":material/skip_previous:", on_click=move_channel, args=(-1,),
+        disabled=st.session_state[frequency_key] == "All",
+    )
     frequency = st.selectbox(
         "Frequency",
-        options=frequencies,
+        options=frequency_options,
         key=frequency_key,
-        format_func=lambda value: format_frequency(band, value),
+        format_func=lambda value: "All frequencies" if value == "All" else format_frequency(band, float(value)),
         persist_state="session",
         width=260,
     )
-    st.button("Next", icon=":material/skip_next:", on_click=move_channel, args=(1,))
+    st.button(
+        "Next", icon=":material/skip_next:", on_click=move_channel, args=(1,),
+        disabled=frequency == "All",
+    )
 
 selected: dict[str, object] | None = None
 source = "station_list"
@@ -147,13 +156,22 @@ if entry_mode == "Station list":
         key=f"log_nearby_only_{band}",
         help="Leave this off for normal DX logging. Turn it on when you only want nearby targets.",
     )
-    matches = stations_on_frequency(
-        band,
-        frequency,
+    station_data = get_station_data()
+    matches = station_data[station_data["band"].astype(str).str.upper() == band].copy()
+    if frequency != "All":
+        tolerance = 0.1 if band == "MW" else 0.001
+        matches = matches[
+            (pd.to_numeric(matches["frequency"], errors="coerce") - float(frequency)).abs()
+            < tolerance
+        ]
+    matches = with_distances(
+        matches,
         float(location["latitude"]),
         float(location["longitude"]),
-        radius_miles=200 if nearby_only else None,
     )
+    if nearby_only:
+        matches = matches[matches["distance_miles"] <= 200]
+    matches = matches.reset_index(drop=True)
     if challenge_filter and not matches.empty:
         matches = matches[
             matches.apply(
@@ -209,9 +227,19 @@ if entry_mode == "Station list":
         st.info("No stations match the current filters.")
         st.stop()
 
-    matches["logged"] = matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
-    view = matches[["call", "city", "region", "country", "county", "grid", "distance_miles", "logged"]].rename(
+    result_count = len(matches)
+    st.caption(f"{result_count:,} station(s) match the current frequency, distance, and search filters.")
+    table_matches = matches.head(1_000).copy()
+    if result_count > len(table_matches):
+        st.info(
+            f"Showing the nearest {len(table_matches):,} of {result_count:,} matches. "
+            "Use the station filters to narrow the full database by call, location, county, or grid."
+        )
+
+    table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
+    view = table_matches[["frequency", "call", "city", "region", "country", "county", "grid", "distance_miles", "logged"]].rename(
         columns={
+            "frequency": "Frequency",
             "call": "Station",
             "city": "City",
             "region": "State / province",
@@ -235,12 +263,15 @@ if entry_mode == "Station list":
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        key=f"log_station_table_{band}_{frequency}",
-        column_config={"Miles": st.column_config.NumberColumn(format="%.1f")},
+        key=f"log_station_table_{band}_{str(frequency).replace('.', '_')}",
+        column_config={
+            "Frequency": st.column_config.NumberColumn(format="%.3f"),
+            "Miles": st.column_config.NumberColumn(format="%.1f"),
+        },
         lazy=False,
     )
     if event.selection.rows:
-        selected = matches.iloc[event.selection.rows[0]].to_dict()
+        selected = table_matches.iloc[event.selection.rows[0]].to_dict()
 
 elif entry_mode == "Manual entry":
     source = "manual"
