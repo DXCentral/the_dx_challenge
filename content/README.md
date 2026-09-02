@@ -33,9 +33,11 @@ deployed changes. Times are always UTC.
 - `include_regions` and `exclude_regions`: Optional state/province allow- and
   block-lists separated with `|`.
 - `min_distance_miles` and `max_distance_miles`: Optional inclusive distance limits.
-- `propagation_modes`: Optional FM/NWR modes separated with `|`.
-- `dayparts`: Optional MW automatic modes separated with `|`. Supported values are
-  `Daytime`, `Sunrise grayline`, `Sunset grayline`, and `Nighttime`.
+- `propagation_modes`: Optional modes separated with `|`. Supported MW values are
+  `Groundwave / Daytime`, `Sunrise grayline`, `Sunset grayline`, and
+  `Skywave / Nighttime`; FM/NWR propagation modes may be mixed into the same field.
+- `dayparts`: Legacy MW daypart field retained for older schedules. New challenges
+  should use `propagation_modes`; the Admin page maintains compatibility automatically.
 - `scoring_method`: `Unique stations`, `Total logs`, `Unique states/provinces`,
   `Unique countries`, `Unique grids`, or `Unique counties`.
 - `description`: Public explanation of the challenge.

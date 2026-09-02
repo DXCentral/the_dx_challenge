@@ -1,3 +1,11 @@
+### Version 1.0.0-rc7 · Seventh-round testing
+
+- Corrected custom-import timestamp detection so Google Form submission timestamps are not mistaken for reception timestamps; local date/time fields now convert using the DXer's confirmed timezone.
+- Added every MW daypart—Sunrise, Daytime, Sunset, and Nighttime—to challenge rules, logging, imports, and reception editing.
+- Added an All frequencies station search, full-filter match totals, and a performance-safe nearest-results display.
+- Expanded the administrator review queue with reception timestamps, grouped repeat reports, canonical corrections, and direct promotion into a private managed station database.
+- Added direct Home award links and interactive Bandscan distance filters with one-click clearing.
+
 ### Version 1.0.0-rc6 · Sixth-round testing
 
 - Expanded Current and Previous challenge results into a full challenge-specific analytics dashboard with all-DXer counters, selectable DXer tables, maps, paths, filters, and qualifying receptions.
