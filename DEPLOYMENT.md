@@ -19,6 +19,22 @@
 6. Reboot the app after the deploy so the new Python modules and dependencies are
    loaded together.
 
+**Community → DXer shoutouts** reads the published CSV URL in
+`content/shoutouts_source.txt`; no additional Streamlit secret or service-account
+permission is required. Replace that one-line URL if the published feed ever moves.
+
+As an optional private-Sheet fallback, clear `content/shoutouts_source.txt`, share the
+response Sheet with the existing service-account email as **Viewer**, and add:
+
+```toml
+[community]
+shoutouts_spreadsheet_id = "YOUR_SHOUTOUT_SPREADSHEET_ID"
+shoutouts_worksheet = "Sheet1"
+```
+
+The feed reads only the public name, region, country, category, details, aircheck,
+and submission-date fields. It refreshes in the background about every five minutes.
+
 On the first authenticated launch with valid service-account credentials, the app
 creates or validates its managed Google Sheet tabs and hydrates the fast local cache.
 The app bar should say **durable sync active**. If it shows the cloud-off warning,

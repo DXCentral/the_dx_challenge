@@ -16,6 +16,7 @@ from dxcore.config import (
     STAGING_SPREADSHEET_ID,
 )
 from dxcore.content import challenges_from_frame, load_challenges
+from dxcore.shoutouts import normalize_shoutouts
 from dxcore.stations import frequencies_for_band, load_stations
 from dxcore.store import LocalStore
 from dxcore.themes import theme_css
@@ -75,6 +76,69 @@ def get_station_data() -> pd.DataFrame:
         .drop_duplicates("station_id", keep="last")
         .reset_index(drop=True)
     )
+
+
+def community_shoutout_config() -> tuple[str, str]:
+    try:
+        settings = st.secrets.get("community", {})
+        return (
+            str(settings.get("shoutouts_spreadsheet_id", "")).strip(),
+            str(settings.get("shoutouts_worksheet", "Sheet1")).strip() or "Sheet1",
+        )
+    except (FileNotFoundError, AttributeError, TypeError):
+        return "", "Sheet1"
+
+
+def community_shoutout_csv_url() -> str:
+    path = CONTENT_DIR / "shoutouts_source.txt"
+    if not path.exists():
+        return ""
+    return next(
+        (
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ),
+        "",
+    )
+
+
+@st.cache_data(
+    ttl="5m", max_entries=2, refresh_mode="background", show_spinner=False
+)
+def load_published_community_shoutouts(csv_url: str) -> pd.DataFrame:
+    """Load the published WPForms CSV while retaining only public feed fields."""
+    frame = pd.read_csv(csv_url, dtype=str).fillna("")
+    return normalize_shoutouts(frame)
+
+
+@st.cache_data(ttl="5m", max_entries=2, show_spinner=False)
+def load_community_shoutouts(spreadsheet_id: str, worksheet_name: str) -> pd.DataFrame:
+    """Read only the public shoutout fields through the existing service account."""
+    store = get_store()
+    mirror = getattr(store, "mirror", None)
+    if mirror is None:
+        raise RuntimeError("Google Sheet sync is not available.")
+    worksheet = mirror.client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
+    values = worksheet.get_all_values()
+    if not values:
+        return normalize_shoutouts(
+            pd.DataFrame(
+                columns=[
+                    "Entry ID",
+                    "Name",
+                    "What is the category of your shoutout? (Check All That Apply)",
+                    "ShoutOut Details",
+                ]
+            )
+        )
+    headers = [str(value).strip() for value in values[0]]
+    rows = [
+        row + [""] * max(0, len(headers) - len(row))
+        for row in values[1:]
+        if any(str(value).strip() for value in row)
+    ]
+    return normalize_shoutouts(pd.DataFrame(rows, columns=headers))
 
 
 def authentication_configured() -> bool:
