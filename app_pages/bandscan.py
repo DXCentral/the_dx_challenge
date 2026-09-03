@@ -21,6 +21,10 @@ DISTANCE_FILTERS = {
 }
 
 
+def clear_distance_filter(key: str) -> None:
+    st.session_state[key] = "All"
+
+
 def frequency_label(band: str, value: float) -> str:
     if band == "MW":
         return f"{int(value)} kHz"
@@ -89,14 +93,14 @@ with st.container(horizontal=True, vertical_alignment="bottom"):
         key=filter_key,
         persist_state="session",
     )
-    if st.button(
+    st.button(
         "Clear distance filter",
         icon=":material/filter_alt_off:",
         disabled=distance_filter == "All",
         key=f"clear_scan_distance_{band}",
-    ):
-        st.session_state[filter_key] = "All"
-        st.rerun()
+        on_click=clear_distance_filter,
+        args=(filter_key,),
+    )
 
 style_rules: list[str] = []
 frequency_keys = {round(value, 3) for value in frequencies}

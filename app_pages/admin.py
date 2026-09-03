@@ -12,6 +12,7 @@ from dxcore.metrics import canonical_daypart
 from dxcore.propagation import (
     ALL_PROPAGATION_OPTIONS,
     FM_NWR_PROPAGATION_OPTIONS,
+    MW_DAYPART_HELP,
     MW_PROPAGATION_OPTIONS,
 )
 
@@ -81,18 +82,27 @@ if section == "Announcements":
     start = as_datetime(record.get("start_utc"), now)
     end_value = str(record.get("end_utc", "")).strip()
     end = as_datetime(end_value, now.replace(hour=23, minute=59))
-    with st.form(f"admin_announcement_{selected_id}"):
+    with st.container(border=True):
         title = st.text_input("Title", value=str(record.get("title", "")), max_chars=160)
         body = st.text_area("Announcement", value=str(record.get("body", "")), height=160)
         start_columns = st.columns(2)
         start_date = start_columns[0].date_input("Start date (UTC)", value=start.date())
         start_time = start_columns[1].time_input("Start time (UTC)", value=start.time())
-        no_end = st.checkbox("No expiration", value=not bool(end_value))
+        no_end = st.checkbox(
+            "No expiration",
+            value=not bool(end_value),
+            key=f"admin_announcement_no_end_{selected_id}",
+        )
         end_columns = st.columns(2)
         end_date = end_columns[0].date_input("End date (UTC)", value=end.date(), disabled=no_end)
         end_time = end_columns[1].time_input("End time (UTC)", value=end.time(), disabled=no_end)
         active = st.toggle("Visible when within its date window", value=as_bool(record.get("active", 1)))
-        save = st.form_submit_button("Save announcement", icon=":material/save:", type="primary")
+        save = st.button(
+            "Save announcement",
+            icon=":material/save:",
+            type="primary",
+            key=f"admin_announcement_save_{selected_id}",
+        )
     if save:
         try:
             announcement_id = store.upsert_announcement(
@@ -201,7 +211,10 @@ elif section == "Challenges":
             "Propagation modes / MW dayparts",
             propagation_options,
             default=propagation_defaults,
-            help="MW Sunrise, Daytime, Sunset, and Nighttime choices live here with the FM/NWR propagation modes.",
+            help=(
+                "MW Sunrise, Daytime, Sunset, and Nighttime choices live here with the "
+                f"FM/NWR propagation modes. {MW_DAYPART_HELP}"
+            ),
         )
         dayparts = [
             canonical_daypart(value)

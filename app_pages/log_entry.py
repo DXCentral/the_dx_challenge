@@ -10,7 +10,7 @@ from geopy.geocoders import Nominatim
 from app_support import active_challenges_for_band, get_station_data, get_store, require_location
 from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
 from dxcore.geo import haversine_miles, latlon_to_grid
-from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_PROPAGATION_OPTIONS
+from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_PROPAGATION_OPTIONS
 from dxcore.solar import mw_propagation
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
 from modules.import_console import render_import_console
@@ -31,13 +31,13 @@ def band_frequencies(band: str) -> list[float]:
     return NWR_FREQUENCIES
 
 
-def channel_step(band: str, current: float, direction: int) -> float:
-    channels = MW_10_KHZ if band == "MW" else band_frequencies(band)
-    if band == "MW":
+def channel_step(band: str, current: float, direction: int, channels: list[float] | None = None) -> float:
+    channels = channels or (MW_10_KHZ if band == "MW" else band_frequencies(band))
+    if band == "MW" or channels != band_frequencies(band):
         if direction > 0:
-            candidates = [value for value in channels if value > current + 0.01]
+            candidates = [value for value in channels if value > current + 0.001]
             return candidates[0] if candidates else channels[0]
-        candidates = [value for value in channels if value < current - 0.01]
+        candidates = [value for value in channels if value < current - 0.001]
         return candidates[-1] if candidates else channels[-1]
     nearest = min(range(len(channels)), key=lambda index: abs(channels[index] - current))
     return channels[(nearest + direction) % len(channels)]
@@ -110,23 +110,47 @@ if active_sprints:
             help="When enabled, the frequency and station list move to the selected active challenge. Turn it off at any time to log other DX.",
         )
 frequency_key = f"log_frequency_{band}"
-frequency_options: list[float | str] = (
-    ["All", *frequencies] if entry_mode == "Station list" else frequencies
-)
-st.session_state.setdefault(frequency_key, frequencies[0])
-if st.session_state[frequency_key] not in frequency_options:
-    st.session_state[frequency_key] = frequencies[0]
+challenge_frequencies: list[float] = []
+challenge_identity = ""
 if challenge_filter and focused_challenge is not None:
     challenge_frequencies = allowed_challenge_frequencies(focused_challenge, frequencies)
-    if challenge_frequencies and st.session_state[frequency_key] not in challenge_frequencies:
+    challenge_identity = str(focused_challenge.get("id", focused_challenge.get("name", "")))
+frequency_options: list[float | str] = (
+    challenge_frequencies
+    if challenge_filter and challenge_frequencies
+    else (["All", *frequencies] if entry_mode == "Station list" else frequencies)
+)
+st.session_state.setdefault(frequency_key, frequencies[0])
+challenge_focus_key = f"log_challenge_frequency_focus_{band}"
+if challenge_filter and challenge_frequencies:
+    if st.session_state.get(challenge_focus_key) != challenge_identity:
         st.session_state[frequency_key] = challenge_frequencies[0]
+    st.session_state[challenge_focus_key] = challenge_identity
+else:
+    st.session_state.pop(challenge_focus_key, None)
+    if st.session_state[frequency_key] not in frequency_options:
+        st.session_state[frequency_key] = frequencies[0]
+
+if challenge_filter and not challenge_frequencies:
+    st.warning(
+        "The active challenge does not contain a valid frequency for this band. "
+        "The full frequency list remains available so normal logging is not blocked."
+    )
 
 def move_channel(direction: int) -> None:
     current = st.session_state[frequency_key]
+    selectable = [float(value) for value in frequency_options if value != "All"]
     if current == "All":
-        st.session_state[frequency_key] = frequencies[0 if direction > 0 else -1]
+        st.session_state[frequency_key] = selectable[0 if direction > 0 else -1]
     else:
-        st.session_state[frequency_key] = channel_step(band, float(current), direction)
+        restricted_channels = (
+            selectable
+            if challenge_filter and len(challenge_frequencies) < len(frequencies)
+            else None
+        )
+        st.session_state[frequency_key] = channel_step(
+            band, float(current), direction, restricted_channels
+        )
 
 with st.container(horizontal=True, vertical_alignment="bottom"):
     st.button(
@@ -368,6 +392,7 @@ with st.container(border=True):
                 f"Suggested from the selected QTH and reception time: {suggested_propagation}. "
                 "Change it when the recorded reception used a different propagation/daypart classification."
             )
+            st.caption(MW_DAYPART_HELP)
         else:
             propagation = st.selectbox(
                 "Propagation mode",
