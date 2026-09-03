@@ -43,18 +43,39 @@ def _event_utc(day: date, latitude: float, longitude: float, sunrise: bool) -> d
 
 
 def mw_propagation(reception_utc: datetime, latitude: float, longitude: float) -> str:
-    reception_utc = reception_utc.astimezone(timezone.utc)
-    sunrise = _event_utc(reception_utc.date(), latitude, longitude, sunrise=True)
-    sunset = _event_utc(reception_utc.date(), latitude, longitude, sunrise=False)
-    if sunrise is None or sunset is None:
+    """Classify MW propagation from the receiving QTH's solar events.
+
+    Sunrise and sunset each cover the event minute plus or minus 60 minutes.
+    Daytime begins at minute 61 after sunrise and ends at minute 61 before
+    sunset; the remaining period is nighttime.
+    """
+    reception_minute = reception_utc.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    events: list[tuple[datetime, str]] = []
+    for offset in (-1, 0, 1):
+        event_day = reception_minute.date() + timedelta(days=offset)
+        for is_sunrise, label in ((True, "sunrise"), (False, "sunset")):
+            event = _event_utc(event_day, latitude, longitude, sunrise=is_sunrise)
+            if event is not None:
+                events.append((event.replace(second=0, microsecond=0), label))
+    if not events:
         return "MW automatic — polar day/night review"
-    if sunset <= sunrise:
-        sunset += timedelta(days=1)
     grayline = timedelta(minutes=60)
-    if sunrise - grayline <= reception_utc <= sunrise + grayline:
-        return "Sunrise grayline"
-    if sunset - grayline <= reception_utc <= sunset + grayline:
-        return "Sunset grayline"
-    if sunrise + grayline < reception_utc < sunset - grayline:
-        return "Groundwave / Daytime"
-    return "Skywave / Nighttime"
+    nearby = sorted(
+        (
+            (abs((reception_minute - instant).total_seconds()), label)
+            for instant, label in events
+            if instant - grayline <= reception_minute <= instant + grayline
+        ),
+        key=lambda item: item[0],
+    )
+    if nearby:
+        return "Sunrise grayline" if nearby[0][1] == "sunrise" else "Sunset grayline"
+
+    earlier = [(instant, label) for instant, label in events if instant < reception_minute]
+    if not earlier:
+        return "MW automatic — polar day/night review"
+    return (
+        "Groundwave / Daytime"
+        if max(earlier, key=lambda item: item[0])[1] == "sunrise"
+        else "Skywave / Nighttime"
+    )

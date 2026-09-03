@@ -774,9 +774,7 @@ def normalize_import(
             source_county = str(_value(row, mapping, "county")).strip()
             source_grid = str(_value(row, mapping, "grid")).strip().upper()
             if band == "MW":
-                source_propagation = normalize_mw_propagation(
-                    _value(row, mapping, "propagation")
-                ) or mw_propagation(
+                source_propagation = mw_propagation(
                     reception,
                     float(location["latitude"]),
                     float(location["longitude"]),
@@ -842,9 +840,7 @@ def normalize_import(
                 batch_times.setdefault(station_id, []).append(reception)
 
             if band == "MW":
-                propagation = normalize_mw_propagation(
-                    _value(row, mapping, "propagation")
-                ) or mw_propagation(
+                propagation = mw_propagation(
                     reception,
                     float(location["latitude"]),
                     float(location["longitude"]),

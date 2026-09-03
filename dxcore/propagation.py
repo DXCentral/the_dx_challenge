@@ -23,6 +23,13 @@ FM_NWR_PROPAGATION_OPTIONS = [
 
 ALL_PROPAGATION_OPTIONS = [*MW_PROPAGATION_OPTIONS, *FM_NWR_PROPAGATION_OPTIONS]
 
+MW_DAYPART_HELP = (
+    "Sunrise: 1 hour before through 1 hour after local sunrise. "
+    "Daytime: 1:01 after local sunrise through 1:01 before local sunset. "
+    "Sunset: 1 hour before through 1 hour after local sunset. "
+    "Nighttime: 1:01 after local sunset through 1:01 before local sunrise."
+)
+
 
 def _token(value: object) -> str:
     text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode()
@@ -41,4 +48,3 @@ def normalize_mw_propagation(value: object) -> str:
     if token in {"NIGHT", "NIGHTTIME", "SKYWAVE", "SKYWAVENIGHTTIME", "SW"}:
         return "Skywave / Nighttime"
     return ""
-
