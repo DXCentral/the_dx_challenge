@@ -47,6 +47,13 @@ Leave a restriction field blank to allow all values. Active challenges never pre
 ordinary season logging. A DXer may opt into a challenge filter on Log Entry, while
 the results pages independently enforce every rule when calculating challenge scores.
 
+## `shoutouts_source.txt`
+
+Store the single published-to-web CSV URL for the WPForms shoutout response Sheet.
+Community refreshes this source about every five minutes and keeps only the public
+name, broad location, category, details, aircheck, and submission-date columns.
+Replace the URL here if the published Google Sheet changes; no secret is required.
+
 ## `support_email.txt`
 
 Replace `support@example.com` with the inbox that should receive support requests.

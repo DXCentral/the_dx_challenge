@@ -1,3 +1,17 @@
+### Version 1.0.0-rc8.1 · Live Community shoutout feed
+
+- Connected Community directly to the published Season 7 shoutout CSV with a five-minute background-refresh cache.
+- Added the revised Submission Date and aircheck-upload headers so month filtering and media links activate automatically.
+- Kept the service-account/private-Sheet connection available as an optional fallback.
+
+### Version 1.0.0-rc8 · Eighth-round testing
+
+- Made announcement expiration dates and times editable immediately after No expiration is unchecked.
+- Corrected Bandscan distance-filter clearing so every band returns safely to All.
+- Made the active-challenge filter restrict the frequency selector to eligible channels and start at the challenge's lowest frequency.
+- Defined the four MW solar dayparts and made bulk imports calculate them from reception time, date, and operating QTH.
+- Added a newest-first Community shoutout feed with DXer, category, and optional submission-month filters plus attachment links.
+
 ### Version 1.0.0-rc7 · Seventh-round testing
 
 - Corrected custom-import timestamp detection so Google Form submission timestamps are not mistaken for reception timestamps; local date/time fields now convert using the DXer's confirmed timezone.
