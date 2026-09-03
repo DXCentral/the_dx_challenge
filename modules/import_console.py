@@ -19,6 +19,7 @@ from dxcore.importers import (
     resolve_matching_review_rows,
     unlisted_station_id,
 )
+from dxcore.propagation import MW_DAYPART_HELP
 
 
 MAPPING_LABELS = {
@@ -273,6 +274,10 @@ def render_import_console(location: dict[str, object]) -> None:
     st.subheader("Bulk import")
     st.caption(
         "Upload your own reception log. The importer normalizes it against the Season 7 station lists, then requires a reviewed preview before writing anything."
+    )
+    st.caption(
+        "MW dayparts are calculated automatically from each reception's date/time and the selected operating QTH. "
+        + MW_DAYPART_HELP
     )
     uploaded = st.file_uploader(
         "Reception log file",
