@@ -355,6 +355,12 @@ class HybridStore:
             self._sync_one("Logging Entries", log_id)
         return updated, message
 
+    def set_shoutout_read(self, entry_id: str, read_on_air: bool) -> tuple[bool, str]:
+        updated, message = self.local.set_shoutout_read(entry_id, read_on_air)
+        if updated:
+            self._sync_one("Shoutout Status", entry_id)
+        return updated, message
+
     def promote_station_override(
         self, log_id: str
     ) -> tuple[bool, str, str]:

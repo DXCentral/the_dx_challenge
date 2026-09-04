@@ -9,7 +9,7 @@ CONTENT_DIR = APP_ROOT / "content"
 LOCAL_DATA_DIR = APP_ROOT / ".local"
 LOCAL_DB_PATH = LOCAL_DATA_DIR / "dx_challenge_staging_v1.sqlite3"
 APP_LOGO_FILE = ASSET_DIR / "dx_challenge_logo.png"
-APP_VERSION = "1.0.0-rc8.1"
+APP_VERSION = "1.0.0-rc9.1"
 
 STAGING_SPREADSHEET_ID = "1Z0C_bnxCgVMWdhP26MbvKqsGCNcCab0zeSQiIpJzn2A"
 DEFAULT_USER_ID = "local-tester@dxcentralonline.com"
@@ -26,3 +26,4 @@ STATION_FILES = {
 
 COUNTY_REFERENCE_FILE = ASSET_DIR / "us_county_reference.csv"
 COUNTY_GEOJSON_FILE = ASSET_DIR / "us_counties_5m.geojson"
+ADMIN1_GEOJSON_FILE = ASSET_DIR / "canada_mexico_admin1.geojson"

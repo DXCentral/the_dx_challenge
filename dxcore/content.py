@@ -170,7 +170,12 @@ def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, objec
     }
     if not station_qualifies_for_challenge(station_view, challenge):
         return False
-    reception = pd.to_datetime(value.get("reception_utc"), utc=True).to_pydatetime()
+    reception_value = pd.to_datetime(
+        value.get("reception_utc"), utc=True, errors="coerce"
+    )
+    if pd.isna(reception_value):
+        return False
+    reception = reception_value.to_pydatetime()
     if not challenge["start_utc"] <= reception <= challenge["end_utc"]:
         return False
     rules = challenge["rules"]
@@ -186,6 +191,77 @@ def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, objec
     if dayparts and canonical_daypart(raw_propagation).casefold() not in dayparts:
         return False
     return True
+
+
+def challenge_log_mask(
+    logs: pd.DataFrame, challenge: dict[str, object]
+) -> pd.Series:
+    """Vectorized equivalent of ``log_qualifies`` for leaderboard-sized data."""
+    if logs.empty:
+        return pd.Series(False, index=logs.index, dtype=bool)
+    mask = logs["band"].fillna("").astype(str).str.upper().isin(challenge["bands"])
+    rules = challenge["rules"]
+
+    frequencies = pd.to_numeric(logs["frequency"], errors="coerce")
+    specification = rules.get("frequencies", "ALL")
+    if specification != "ALL":
+        frequency_mask = pd.Series(False, index=logs.index, dtype=bool)
+        for item in specification if isinstance(specification, list) else []:
+            if isinstance(item, tuple):
+                frequency_mask |= frequencies.between(
+                    float(item[0]) - 0.001, float(item[1]) + 0.001
+                )
+            else:
+                frequency_mask |= (frequencies - float(item)).abs() < 0.001
+        mask &= frequency_mask
+
+    countries = logs["station_country"].fillna("").astype(str).str.strip().str.casefold()
+    regions = logs["station_region"].fillna("").astype(str).str.strip().str.casefold()
+    include_countries = {item.casefold() for item in rules.get("include_countries", [])}
+    exclude_countries = {item.casefold() for item in rules.get("exclude_countries", [])}
+    include_regions = {item.casefold() for item in rules.get("include_regions", [])}
+    exclude_regions = {item.casefold() for item in rules.get("exclude_regions", [])}
+    if include_countries:
+        mask &= countries.isin(include_countries)
+    if exclude_countries:
+        mask &= ~countries.isin(exclude_countries)
+    if include_regions:
+        mask &= regions.isin(include_regions)
+    if exclude_regions:
+        mask &= ~regions.isin(exclude_regions)
+
+    distances = pd.to_numeric(logs["distance_miles"], errors="coerce")
+    if rules.get("min_distance") is not None:
+        mask &= distances >= float(rules["min_distance"])
+    if rules.get("max_distance") is not None:
+        mask &= distances <= float(rules["max_distance"])
+
+    receptions = pd.to_datetime(logs["reception_utc"], utc=True, errors="coerce")
+    mask &= receptions.between(challenge["start_utc"], challenge["end_utc"])
+
+    raw_propagation = logs["propagation"].fillna("")
+    modes = {
+        canonical_propagation(item).casefold()
+        for item in rules.get("propagation_modes", [])
+    }
+    dayparts = {canonical_daypart(item).casefold() for item in rules.get("dayparts", [])}
+    if modes:
+        mask &= raw_propagation.map(canonical_propagation).str.casefold().isin(modes)
+    if dayparts:
+        mask &= raw_propagation.map(canonical_daypart).str.casefold().isin(dayparts)
+    return mask.fillna(False)
+
+
+def logs_qualifying_for_challenges(
+    logs: pd.DataFrame, challenges: list[dict[str, object]]
+) -> pd.DataFrame:
+    """Return each reception once when it qualifies for at least one challenge."""
+    if logs.empty or not challenges:
+        return logs.iloc[0:0].copy()
+    eligible = pd.Series(False, index=logs.index, dtype=bool)
+    for challenge in challenges:
+        eligible |= challenge_log_mask(logs, challenge)
+    return logs[eligible].copy()
 
 
 def load_announcements(now: datetime | None = None) -> pd.DataFrame:

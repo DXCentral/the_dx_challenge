@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import pandas as pd
 
@@ -106,15 +108,19 @@ def normalize_shoutouts(frame: pd.DataFrame) -> pd.DataFrame:
     normalized["categories"] = frame[columns["categories"]].map(split_categories)
     date_source = columns["submitted_at"]
     normalized["submitted_at"] = (
-        pd.to_datetime(frame[date_source], errors="coerce")
+        pd.to_datetime(
+            frame[date_source], errors="coerce", format="mixed", dayfirst=True, utc=True
+        )
         if date_source
-        else pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+        else pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
     )
     normalized = normalized[
         normalized["name"].ne("") & normalized["details"].ne("")
     ].copy()
     normalized["entry_number"] = pd.to_numeric(normalized["entry_id"], errors="coerce")
-    normalized["submission_month"] = normalized["submitted_at"].dt.to_period("M")
+    normalized["submission_month"] = (
+        normalized["submitted_at"].dt.tz_convert(None).dt.to_period("M")
+    )
     normalized = normalized.sort_values(
         ["submitted_at", "entry_number", "entry_id"],
         ascending=[False, False, False],
@@ -131,3 +137,8 @@ def observed_categories(frame: pd.DataFrame) -> list[str]:
     }
     ordered = [category for category in SHOUTOUT_CATEGORIES if category in values]
     return [*ordered, *sorted(values.difference(ordered), key=str.casefold)]
+
+
+def media_filename(url: object) -> str:
+    path = unquote(urlparse(_clean(url)).path)
+    return PurePosixPath(path).name or "Uploaded media"

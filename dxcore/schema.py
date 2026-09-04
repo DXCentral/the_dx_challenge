@@ -101,4 +101,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "ticket_id", "user_id", "category", "subject", "details", "created_utc",
         "updated_utc", "status", "admin_comment",
     ],
+    "Shoutout Status": [
+        "entry_id", "read_on_air", "read_utc", "updated_utc",
+    ],
 }

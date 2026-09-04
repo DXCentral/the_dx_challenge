@@ -25,6 +25,7 @@ SHEET_TABLES = {
     "Announcements": "announcements",
     "Challenges": "challenges",
     "Support Tickets": "support_tickets",
+    "Shoutout Status": "shoutout_status",
 }
 
 
@@ -201,6 +202,12 @@ class LocalStore:
                     longitude REAL NOT NULL,
                     source_log_id TEXT NOT NULL,
                     approved_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS shoutout_status (
+                    entry_id TEXT PRIMARY KEY,
+                    read_on_air INTEGER NOT NULL DEFAULT 0,
+                    read_utc TEXT NOT NULL DEFAULT '',
                     updated_utc TEXT NOT NULL
                 );
                 """
@@ -916,6 +923,31 @@ class LocalStore:
                     "SELECT * FROM logs WHERE user_id=? AND deleted_utc='' ORDER BY reception_utc DESC", connection, params=(user_id,)
                 )
             return pd.read_sql_query("SELECT * FROM logs WHERE deleted_utc='' ORDER BY reception_utc DESC", connection)
+
+    def shoutout_statuses(self) -> pd.DataFrame:
+        with self.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT * FROM shoutout_status ORDER BY updated_utc DESC", connection
+            )
+
+    def set_shoutout_read(self, entry_id: str, read_on_air: bool) -> tuple[bool, str]:
+        cleaned_id = str(entry_id).strip()
+        if not cleaned_id:
+            return False, "The shoutout entry ID is missing."
+        now = iso_utc()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO shoutout_status(entry_id, read_on_air, read_utc, updated_utc)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(entry_id) DO UPDATE SET
+                    read_on_air=excluded.read_on_air,
+                    read_utc=excluded.read_utc,
+                    updated_utc=excluded.updated_utc
+                """,
+                (cleaned_id, int(read_on_air), now if read_on_air else "", now),
+            )
+        return True, "Shoutout marked as read on air." if read_on_air else "Read-on-air mark removed."
 
     def station_review_logs(self) -> pd.DataFrame:
         with self.connect() as connection:
