@@ -9,9 +9,10 @@ import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
-from app_support import display_names, get_store
+from app_support import display_names, get_store, season_eligible_logs, season_marathons
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.metrics import add_geography_keys, normalize_county
+from dxcore.subdivisions import subdivision_counts, subdivision_figure
 from dxcore.themes import THEMES
 
 
@@ -114,12 +115,19 @@ def clear_filters() -> None:
 
 
 st.title("Stats")
-st.caption("Filters apply to every counter, table, chart, and selected map. Award-style geography uses unique canonical stations per DXer.")
+st.caption(
+    "Filters apply to every counter, table, chart, and selected map. Only receptions "
+    "meeting an enabled Season 7 marathon rule are included."
+)
 
 store = get_store()
-logs = add_geography_keys(store.logs())
+all_logs = store.logs()
+logs = add_geography_keys(season_eligible_logs(all_logs))
 if logs.empty:
-    st.info("Submit a staging reception to activate statistics and maps.")
+    if not season_marathons():
+        st.info("No enabled season-long marathon is configured, so Stats has no in-scope receptions.")
+    else:
+        st.info("No stored receptions meet the current Season 7 marathon criteria.")
     st.stop()
 
 name_lookup = display_names()
@@ -236,6 +244,8 @@ map_view = st.selectbox(
         "Overview",
         "Logs by band",
         "Logs by state / province",
+        "Logs by Canadian province",
+        "Logs by Mexican state",
         "Logs by country",
         "Logs by grid square",
         "Logs by county",
@@ -318,6 +328,42 @@ elif map_view == "Logs by state / province":
             if picked != region_choice:
                 st.session_state.stats_pending_region = picked
                 st.rerun()
+elif map_view in {"Logs by Canadian province", "Logs by Mexican state"}:
+    country_code = "CAN" if map_view == "Logs by Canadian province" else "MEX"
+    geography_label = "Province / territory" if country_code == "CAN" else "State"
+    counts = subdivision_counts(unique_logs, country_code, "Unique stations")
+    table_col, map_col = st.columns([1, 2])
+    with table_col:
+        visible_counts = counts[counts["Unique stations"] > 0][
+            ["admin1_name", "Unique stations"]
+        ].rename(columns={"admin1_name": geography_label})
+        if visible_counts.empty:
+            st.caption(f"No logged {geography_label.casefold()} matches these filters.")
+        else:
+            st.dataframe(visible_counts, hide_index=True, height=500)
+    with map_col:
+        fig = subdivision_figure(
+            counts,
+            country_code,
+            "Unique stations",
+            background=background,
+            surface=surface,
+            text_color=text_color,
+            border_color=palette["border"],
+            daylight=str(st.session_state.user.get("theme_name")) == "Daylight blue",
+        )
+        st.plotly_chart(
+            fig,
+            key=f"stats_{country_code.lower()}_admin1_map_{selection_version}",
+            config={
+                "scrollZoom": True,
+                "displaylogo": False,
+                "toImageButtonOptions": {
+                    "format": "jpeg",
+                    "filename": f"dx-challenge-{country_code.lower()}-subdivisions",
+                },
+            },
+        )
 elif map_view == "Logs by country":
     counts = (
         unique_logs[unique_logs["station_country"] != ""]

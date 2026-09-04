@@ -1,6 +1,6 @@
 import streamlit as st
 
-from app_support import challenge_status, get_store
+from app_support import challenge_status, get_store, season_eligible_logs, season_marathons
 from dxcore.content import active_announcements
 
 
@@ -27,7 +27,18 @@ with st.container(border=True):
         st.markdown("No weekly challenge is active. Season-long logging remains available.")
 
 st.subheader("Season progress")
-logs = store.logs(user_id)
+all_user_logs = store.logs(user_id)
+logs = season_eligible_logs(all_user_logs)
+marathons = season_marathons()
+if marathons:
+    earliest = min(item["start_utc"] for item in marathons)
+    latest = max(item["end_utc"] for item in marathons)
+    st.caption(
+        f"Only receptions eligible for an enabled season marathon are counted · "
+        f"{earliest:%d %b %Y %H%M UTC} – {latest:%d %b %Y %H%M UTC}"
+    )
+else:
+    st.warning("No enabled season marathon is configured, so season progress is paused.")
 targets = {"MW": ("MW Master", 700), "FM": ("FM Master", 1000), "NWR": ("NWR Master", 100)}
 with st.container(horizontal=True):
     for band, (award, target) in targets.items():

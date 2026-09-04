@@ -4,15 +4,12 @@ import pandas as pd
 import streamlit as st
 
 from app_support import challenge_status, display_names, get_store
-from dxcore.content import log_qualifies
+from dxcore.content import logs_qualifying_for_challenges
 from modules.challenge_dashboard import render_challenge_dashboard
 
 
 def challenge_logs(challenge: dict[str, object], logs: pd.DataFrame) -> pd.DataFrame:
-    if logs.empty:
-        return logs
-    mask = logs.apply(lambda row: log_qualifies(row, challenge), axis=1)
-    return logs[mask].copy()
+    return logs_qualifying_for_challenges(logs, [challenge])
 
 
 def show_results_period(period: str) -> None:

@@ -3,8 +3,14 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app_support import challenge_status, display_names, get_store
-from dxcore.content import log_qualifies
+from app_support import (
+    challenge_status,
+    display_names,
+    get_store,
+    season_eligible_logs,
+    season_marathons,
+)
+from dxcore.content import logs_qualifying_for_challenges
 from dxcore.metrics import add_geography_keys, canonical_daypart
 
 
@@ -121,15 +127,23 @@ st.caption(
     "Select any column heading to sort the displayed table."
 )
 
-logs = add_geography_keys(get_store().logs())
-if logs.empty:
+all_logs = add_geography_keys(get_store().logs())
+if all_logs.empty:
     st.info("No staging receptions are available for standings.")
     st.stop()
-logs["mw_daypart"] = logs["propagation"].map(canonical_daypart)
+all_logs["mw_daypart"] = all_logs["propagation"].map(canonical_daypart)
 name_lookup = display_names()
 
 st.subheader("Season leaders")
-season_filtered = filter_logs(logs, name_lookup, prefix="season_leaders")
+marathons = season_marathons()
+logs = season_eligible_logs(all_logs)
+if marathons:
+    st.caption(
+        "Only receptions satisfying at least one enabled marathon's complete Admin rules are counted."
+    )
+else:
+    st.warning("No enabled season marathon is configured, so season standings are paused.")
+season_filtered = filter_logs(logs, name_lookup, prefix="season_leaders") if not logs.empty else logs
 season_table = standings(season_filtered, name_lookup)
 if season_table.empty:
     st.caption("No season receptions match these filters.")
@@ -141,8 +155,7 @@ current, previous, _ = challenge_status()
 sprints = [item for item in current + previous if item["type"] == "sprint"]
 qualified_frames: list[pd.DataFrame] = []
 for challenge in sprints:
-    mask = logs.apply(lambda row: log_qualifies(row, challenge), axis=1)
-    matches = logs[mask].copy()
+    matches = logs_qualifying_for_challenges(all_logs, [challenge])
     if not matches.empty:
         matches["sprint_name"] = str(challenge["name"])
         matches["sprint_id"] = str(challenge["id"])

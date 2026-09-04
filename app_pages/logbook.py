@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
-from app_support import get_store
+from app_support import get_store, season_eligible_logs, season_marathons
 from dxcore.metrics import add_geography_keys
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_PROPAGATION_OPTIONS
 
@@ -15,14 +15,32 @@ def clear_logbook_filters() -> None:
 
 
 st.title("My logbook")
-st.caption("Only receptions owned by the signed-in DXer are shown or exported. Station-list data is never included.")
+st.caption(
+    "Only this DXer's season-eligible receptions are shown or exported. "
+    "Imported archive records outside the enabled Season 7 marathon rules remain stored but do not appear here."
+)
 
 store = get_store()
 user_id = st.session_state.user["user_id"]
-logs = store.logs(user_id)
+all_logs = store.logs(user_id)
+logs = season_eligible_logs(all_logs)
 if logs.empty:
-    st.info("No receptions have been submitted in local test mode.")
+    if all_logs.empty:
+        st.info("No receptions have been submitted yet.")
+    elif not season_marathons():
+        st.info("No enabled season-long marathon is configured, so no receptions are in scope.")
+    else:
+        st.info(
+            f"None of your {len(all_logs):,} stored reception(s) meet the current "
+            "Season 7 marathon criteria."
+        )
     st.stop()
+
+outside_season = len(all_logs) - len(logs)
+if outside_season:
+    st.caption(
+        f"{outside_season:,} stored reception(s) outside the current season criteria are archived and excluded."
+    )
 
 logs = add_geography_keys(logs)
 regions = sorted(value for value in logs["station_region"].astype(str).unique() if value)
