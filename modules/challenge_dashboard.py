@@ -15,6 +15,11 @@ import streamlit as st
 
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.metrics import add_geography_keys, normalize_county
+from dxcore.subdivisions import (
+    add_subdivision_keys,
+    subdivision_counts,
+    subdivision_figure,
+)
 from dxcore.themes import THEMES
 
 
@@ -291,7 +296,8 @@ def render_challenge_dashboard(
     analysis = st.selectbox(
         "Challenge analysis",
         [
-            "Logs by DXer", "States heard by DXer", "Countries heard by DXer",
+            "Logs by DXer", "States heard by DXer", "Logs by Canadian province",
+            "Logs by Mexican state", "Countries heard by DXer",
             "Grid squares heard by DXer", "Counties heard by DXer", "Station locations", "Paths",
         ],
         key=f"{prefix}_analysis",
@@ -340,6 +346,44 @@ def render_challenge_dashboard(
             if picked != choices["region_choice"]:
                 st.session_state[f"{prefix}_pending_region"] = picked
                 st.rerun()
+    elif analysis in {"Logs by Canadian province", "Logs by Mexican state"}:
+        country_code = "CAN" if analysis == "Logs by Canadian province" else "MEX"
+        country_rows = add_subdivision_keys(unique_logs, country_code)
+        _dxer_table(
+            country_rows,
+            name_lookup,
+            field="admin1_code",
+            label=(
+                "Unique Canadian provinces / territories"
+                if country_code == "CAN"
+                else "Unique Mexican states"
+            ),
+            prefix=prefix,
+            current_dxer=dxer_choice,
+        )
+        counts = subdivision_counts(unique_logs, country_code, "Unique logs")
+        fig = subdivision_figure(
+            counts,
+            country_code,
+            "Unique logs",
+            background=background,
+            surface=surface,
+            text_color=text_color,
+            border_color=palette["border"],
+            daylight=str(st.session_state.user.get("theme_name")) == "Daylight blue",
+        )
+        st.plotly_chart(
+            fig,
+            key=f"{prefix}_{country_code.lower()}_admin1_map_{selection_version}",
+            config={
+                "scrollZoom": True,
+                "displaylogo": False,
+                "toImageButtonOptions": {
+                    "format": "jpeg",
+                    "filename": f"{prefix}-{country_code.lower()}-subdivisions",
+                },
+            },
+        )
     elif analysis == "Countries heard by DXer":
         _dxer_table(
             unique_logs, name_lookup, field="station_country", label="Unique countries",
@@ -474,6 +518,8 @@ def render_challenge_dashboard(
     sort_fields = {
         "Logs by DXer": ["DXer", "reception_utc"],
         "States heard by DXer": ["station_region", "DXer", "reception_utc"],
+        "Logs by Canadian province": ["station_region", "DXer", "reception_utc"],
+        "Logs by Mexican state": ["station_region", "DXer", "reception_utc"],
         "Countries heard by DXer": ["station_country", "DXer", "reception_utc"],
         "Grid squares heard by DXer": ["grid4", "DXer", "reception_utc"],
         "Counties heard by DXer": ["county_key", "DXer", "reception_utc"],
