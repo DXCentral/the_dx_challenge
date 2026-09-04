@@ -32,7 +32,7 @@ deployed changes. Times are always UTC.
 - `exclude_countries`: Optional country block-list separated with `|`.
 - `include_regions` and `exclude_regions`: Optional state/province allow- and
   block-lists separated with `|`.
-- `min_distance_miles` and `max_distance_miles`: Optional inclusive distance limits.
+- `min_distance` and `max_distance`: Optional inclusive distance limits in miles.
 - `propagation_modes`: Optional modes separated with `|`. Supported MW values are
   `Groundwave / Daytime`, `Sunrise grayline`, `Sunset grayline`, and
   `Skywave / Nighttime`; FM/NWR propagation modes may be mixed into the same field.
@@ -43,9 +43,14 @@ deployed changes. Times are always UTC.
 - `description`: Public explanation of the challenge.
 - `active`: `true` enables the row; `false` keeps it as a draft.
 
-Leave a restriction field blank to allow all values. Active challenges never prevent
-ordinary season logging. A DXer may opt into a challenge filter on Log Entry, while
-the results pages independently enforce every rule when calculating challenge scores.
+Leave a restriction field blank to allow all values. Sprint rules never prevent
+ordinary logging. A DXer may opt into a sprint filter on Log Entry, while the results
+pages independently enforce every sprint rule when calculating challenge scores.
+
+Enabled `marathon` rows define season-long eligibility. Home progress, Awards, and
+Season leaders count a reception only when it satisfies at least one enabled marathon's
+date window, band, frequency, geography, distance, propagation, and daypart rules.
+Changing a marathon in Admin recalculates those views without deleting historical logs.
 
 ## `shoutouts_source.txt`
 

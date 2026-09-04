@@ -1,3 +1,18 @@
+### Version 1.0.0-rc9.1 · Season scope, achievements, and environment split
+
+- Made My Logbook, its personal export, and every Stats view use the same enabled Season 7 marathon boundary as Awards and season leaderboards; imported out-of-season archive logs remain stored but excluded.
+- Added an administrator-only, durable read-on-air control and read/unread filter for Community shoutouts plus a public Read on air badge.
+- Added uploaded-media filenames beside shoutout attachment buttons.
+- Replaced Livestream prompts with Achievement Corner, driven by actual award qualifications and endorsement thresholds.
+- Made the app environment label and private Google Sheet selectable through Streamlit Secrets so staging data can remain intact while production starts clean.
+
+### Version 1.0.0-rc9 · Ninth-round challenge mechanics
+
+- Made enabled Admin-managed marathon rules authoritative for Home season progress, Awards, and Season leaders; out-of-window logs remain safely stored but no longer count.
+- Corrected the published shoutout date protocol to UTC `DD/MM/YYYY` and replaced the long feed with a one-at-a-time previous/next carousel.
+- Added zoomable Canadian province/territory and Mexican state choropleth maps to Stats and challenge analysis.
+- Added canonical Canada/Mexico subdivision matching for country codes, abbreviations, full names, and accented source-list variants.
+
 ### Version 1.0.0-rc8.1 · Live Community shoutout feed
 
 - Connected Community directly to the published Season 7 shoutout CSV with a five-minute background-refresh cache.
