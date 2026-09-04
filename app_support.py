@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import hmac
+import re
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -13,9 +14,14 @@ from dxcore.config import (
     CONTENT_DIR,
     DEFAULT_USER_ID,
     DEFAULT_USER_NAME,
+    LOCAL_DB_PATH,
     STAGING_SPREADSHEET_ID,
 )
-from dxcore.content import challenges_from_frame, load_challenges
+from dxcore.content import (
+    challenges_from_frame,
+    load_challenges,
+    logs_qualifying_for_challenges,
+)
 from dxcore.shoutouts import normalize_shoutouts
 from dxcore.stations import frequencies_for_band, load_stations
 from dxcore.store import LocalStore
@@ -27,15 +33,28 @@ LOGGER = logging.getLogger(__name__)
 
 @st.cache_resource
 def get_store() -> LocalStore:
-    local = LocalStore()
+    try:
+        app_settings = st.secrets.get("app", {})
+        environment = str(app_settings.get("environment", "staging")).strip().lower()
+        spreadsheet_id = str(
+            app_settings.get("spreadsheet_id", STAGING_SPREADSHEET_ID)
+        ).strip()
+        writes_enabled = bool(app_settings.get("writes_enabled", True))
+    except (FileNotFoundError, AttributeError, TypeError):
+        app_settings = {}
+        environment = "local"
+        spreadsheet_id = ""
+        writes_enabled = False
+    cache_label = re.sub(r"[^a-z0-9_-]+", "-", environment or "staging").strip("-")
+    if spreadsheet_id:
+        cache_label = f"{cache_label}_{spreadsheet_id[-12:]}"
+    local = LocalStore(
+        LOCAL_DB_PATH.with_name(f"dx_challenge_{cache_label or 'local'}_v1.sqlite3")
+    )
     try:
         credentials = dict(st.secrets["gcp_service_account"])
     except (FileNotFoundError, KeyError):
         return local
-    try:
-        writes_enabled = bool(st.secrets.get("app", {}).get("writes_enabled", True))
-    except (AttributeError, TypeError):
-        writes_enabled = True
     if not writes_enabled:
         return local
     try:
@@ -43,7 +62,7 @@ def get_store() -> LocalStore:
 
         return HybridStore(
             local,
-            GoogleSheetMirror(credentials, STAGING_SPREADSHEET_ID),
+            GoogleSheetMirror(credentials, spreadsheet_id or STAGING_SPREADSHEET_ID),
         )
     except Exception as error:
         LOGGER.exception("Google Sheet store initialization failed")
@@ -167,6 +186,36 @@ def admin_page_available() -> bool:
         and str(st.session_state.get("user", {}).get("email", "")).strip().lower()
         == email
     )
+
+
+def admin_session_authorized() -> bool:
+    """Return True only after the configured administrator completed both sign-ins."""
+    signed_in_email = str(
+        st.session_state.get("user", {}).get("email", "")
+    ).strip().lower()
+    return bool(
+        admin_page_available()
+        and st.session_state.get("admin_authorized")
+        and st.session_state.get("admin_authorized_email") == signed_in_email
+    )
+
+
+def app_environment() -> str:
+    try:
+        value = str(st.secrets.get("app", {}).get("environment", "staging")).strip()
+    except (FileNotFoundError, AttributeError, TypeError):
+        value = "local"
+    return (value or "staging").upper()
+
+
+def configured_spreadsheet_id() -> str:
+    try:
+        value = str(
+            st.secrets.get("app", {}).get("spreadsheet_id", STAGING_SPREADSHEET_ID)
+        ).strip()
+    except (FileNotFoundError, AttributeError, TypeError):
+        value = STAGING_SPREADSHEET_ID
+    return value or STAGING_SPREADSHEET_ID
 
 
 def require_admin_access() -> None:
@@ -303,6 +352,9 @@ def render_app_bar() -> None:
     with controls:
         with st.container(horizontal=True, vertical_alignment="center"):
             st.markdown(f"**The DX Challenge · Season 7**  :blue-badge[v{APP_VERSION}]")
+            environment = app_environment()
+            if environment != "PRODUCTION":
+                st.badge(environment.title(), icon=":material/science:", color="orange")
             if authentication_configured():
                 st.badge(
                     st.session_state.user["display_name"],
@@ -339,7 +391,8 @@ def render_app_bar() -> None:
     pending_sync = int(getattr(store, "pending_sync_count", 0))
     if getattr(store, "sync_enabled", False) and not getattr(store, "sync_error", "") and not pending_sync:
         st.caption(
-            f"Private Google Sheet {STAGING_SPREADSHEET_ID[-8:]} · durable sync active"
+            f"{app_environment().title()} · private Google Sheet "
+            f"{configured_spreadsheet_id()[-8:]} · durable sync active"
         )
     elif getattr(store, "sync_error", "") or pending_sync:
         st.warning(
@@ -388,10 +441,36 @@ def bandscan_progress(location_id: str, band: str, mw_spacing: str = "10 kHz") -
     return completed, total, completed / total if total else 0.0
 
 
+def configured_challenges() -> list[dict[str, object]]:
+    """Return the enabled Admin-managed schedule, falling back to the seed CSV."""
+    # An intentionally disabled schedule must stay disabled. Use the seed CSV
+    # only before the managed table has ever been populated.
+    frame = get_store().challenges()
+    return challenges_from_frame(frame) if not frame.empty else load_challenges()
+
+
+def season_marathons(band: str | None = None) -> list[dict[str, object]]:
+    marathons = [
+        challenge
+        for challenge in configured_challenges()
+        if challenge["type"] == "marathon"
+    ]
+    if band:
+        band_name = str(band).upper()
+        marathons = [
+            challenge for challenge in marathons if band_name in challenge["bands"]
+        ]
+    return marathons
+
+
+def season_eligible_logs(logs: pd.DataFrame, band: str | None = None) -> pd.DataFrame:
+    """Apply every enabled marathon rule and retain each qualifying log once."""
+    return logs_qualifying_for_challenges(logs, season_marathons(band))
+
+
 def challenge_status(now: datetime | None = None) -> tuple[list[dict], list[dict], list[dict]]:
     instant = now or datetime.now(timezone.utc)
-    frame = get_store().challenges(active_only=True)
-    challenges = challenges_from_frame(frame) if not frame.empty else load_challenges()
+    challenges = configured_challenges()
     current = [item for item in challenges if item["start_utc"] <= instant <= item["end_utc"]]
     previous = sorted(
         [item for item in challenges if item["end_utc"] < instant], key=lambda item: item["end_utc"], reverse=True
