@@ -9,12 +9,7 @@ CONTENT_DIR = APP_ROOT / "content"
 LOCAL_DATA_DIR = APP_ROOT / ".local"
 LOCAL_DB_PATH = LOCAL_DATA_DIR / "dx_challenge_staging_v1.sqlite3"
 APP_LOGO_FILE = ASSET_DIR / "dx_challenge_logo.png"
-APP_VERSION = "1.0.0-rc10.5"
-USER_GUIDE_URL = (
-    "https://raw.githubusercontent.com/DXCentral/the_dx_challenge/"
-    "a1cf205714a2d03c6aa0c10cdcf56960a1385002/"
-    "The_DX_Challenge_User_Guide_v1.0%20Complete.pdf"
-)
+APP_VERSION = "1.0.0-rc10.5.1"
 
 STAGING_SPREADSHEET_ID = "1Z0C_bnxCgVMWdhP26MbvKqsGCNcCab0zeSQiIpJzn2A"
 PRODUCTION_SPREADSHEET_ID = "1EMPxrbrNZlrq2BzbqdBNeW8ZFVTR325Q_hztMJ7hAO8"
