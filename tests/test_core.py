@@ -26,7 +26,13 @@ from dxcore.geo import (
     resolve_place,
     valid_coordinates,
 )
-from dxcore.metrics import add_geography_keys, canonical_daypart, canonical_propagation, challenge_scores
+from dxcore.metrics import (
+    add_geography_keys,
+    canonical_daypart,
+    canonical_propagation,
+    challenge_scores,
+    valid_station_coordinates,
+)
 from dxcore.solar import _event_utc, mw_propagation
 from dxcore.stations import load_stations, stations_on_frequency
 from dxcore.store import LocalStore
@@ -80,6 +86,19 @@ class GeographyTests(unittest.TestCase):
 
     def test_haversine_identity(self) -> None:
         self.assertAlmostEqual(haversine_miles(30.0, -90.0, 30.0, -90.0), 0.0)
+
+    def test_map_coordinates_normalize_mixed_sheet_types(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "station_latitude": [29.9, "30.1", "not-a-number", "95"],
+                "station_longitude": ["-90.1", -91.2, "80", "-90"],
+                "band": ["MW", "FM", "NWR", "MW"],
+            }
+        )
+        valid = valid_station_coordinates(frame)
+        self.assertEqual(valid["band"].tolist(), ["MW", "FM"])
+        self.assertTrue(pd.api.types.is_float_dtype(valid["station_latitude"]))
+        self.assertAlmostEqual(valid["station_longitude"].mean(), -90.65)
 
     def test_city_region_lookup_always_derives_coordinates_and_grid(self) -> None:
         geocoder = self.FakeGeocoder()
@@ -519,17 +538,35 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(self.store.station_review_logs().empty)
 
     def test_station_override_can_be_edited_and_reverted(self) -> None:
+        accepted, log_id = self.store.append_log(
+            self._log(datetime(2026, 9, 5, 3, 0, tzinfo=timezone.utc))
+        )
+        self.assertTrue(accepted)
         updated, _, station_id = self.store.upsert_station_override(
             {
                 "station_id": "fm_example", "band": "FM", "frequency": 90.7,
                 "call": "TEST-FM", "city": "New Orleans", "region": "LA",
                 "country": "United States", "county": "Orleans", "grid": "",
-                "latitude": 29.95, "longitude": -90.07, "source_log_id": "admin",
+                "latitude": 9.0, "longitude": -79.5, "source_log_id": "admin",
             }
         )
         self.assertTrue(updated)
         self.assertEqual(station_id, "fm_example")
         self.assertTrue(self.store.station_overrides().iloc[0]["grid"])
+        corrected = self.store.logs(self.user_id).set_index("log_id").loc[log_id]
+        self.assertEqual(corrected["call"], "TEST-FM")
+        self.assertAlmostEqual(float(corrected["station_latitude"]), 9.0)
+        self.assertAlmostEqual(float(corrected["station_longitude"]), -79.5)
+        self.assertGreater(float(corrected["distance_miles"]), 1_000)
+        self.assertEqual(int(corrected["revision"]), 2)
+        with self.store.connect() as connection:
+            connection.execute(
+                "UPDATE logs SET station_latitude=7.0, station_longitude=81.0 WHERE log_id=?",
+                (log_id,),
+            )
+        self.assertEqual(self.store.refresh_logs_from_station_overrides(), [log_id])
+        reconciled = self.store.logs(self.user_id).set_index("log_id").loc[log_id]
+        self.assertAlmostEqual(float(reconciled["station_longitude"]), -79.5)
         deleted, _ = self.store.delete_station_override(station_id)
         self.assertTrue(deleted)
         self.assertTrue(self.store.station_overrides().empty)
