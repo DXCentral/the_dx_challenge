@@ -1,3 +1,21 @@
+### Version 1.0.0-rc10.4 · Challenge environment isolation
+
+- Keyed the cached Google Sheet connection by environment, Sheet ID, write setting, and service-account identity so a deployment can never retain a client created from another Secrets configuration.
+- Added a hard safety block preventing the known staging and production Sheet IDs from being crossed.
+- Made each environment's nonempty Challenges, Announcements, and Station Overrides tabs replace cached configuration during startup, removing stale configuration inherited before this fix.
+- Made the Admin portal show the exact environment and Sheet suffix targeted by each challenge save.
+
+### Version 1.0.0-rc10.3 · Dual-environment sync resilience
+
+- Reduced Google Sheets startup requests by reusing one worksheet index and one header/data read per managed tab, avoiding quota collisions when staging and production restart together.
+- Stopped rewriting an unchanged authenticated user on every Streamlit interaction.
+- Made Retry Google Sheet sync resume an interrupted startup hydration instead of performing only a user-record write.
+
+### Version 1.0.0-rc10.2 · Production isolation hotfix
+
+- Made the production Google Sheet authoritative during startup, including intentionally empty tabs, so cleared beta records cannot survive in or be restored from the fast local cache.
+- Preserved staging's safe tab-seeding behavior for demonstrations and schema upgrades while keeping its cache and Google Sheet isolated from production.
+
 ### Version 1.0.0-rc10.1 · Station correction and map hotfix
 
 - Made administrator station-database corrections cascade into existing reception records, including corrected coordinates, grid, station details, and recalculated QTH distance; the repaired records are mirrored back to Google Sheets.
