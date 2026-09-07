@@ -63,6 +63,7 @@ def get_store() -> LocalStore:
         return HybridStore(
             local,
             GoogleSheetMirror(credentials, spreadsheet_id or STAGING_SPREADSHEET_ID),
+            environment=environment,
         )
     except Exception as error:
         LOGGER.exception("Google Sheet store initialization failed")
