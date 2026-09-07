@@ -8,11 +8,15 @@ import pandas as pd
 
 from dxcore.bandscan import reception_history
 from dxcore.content import (
+    allowed_challenge_frequencies,
+    challenge_log_mask,
     challenges_from_frame,
     frequency_allowed,
     load_challenges,
     log_qualifies,
+    logs_qualifying_for_challenges,
     station_qualifies_for_challenge,
+    validate_season_submission,
 )
 from dxcore.geo import (
     grid_to_latlon,
@@ -22,10 +26,11 @@ from dxcore.geo import (
     resolve_place,
     valid_coordinates,
 )
-from dxcore.metrics import add_geography_keys, canonical_daypart, challenge_scores
-from dxcore.solar import mw_propagation
+from dxcore.metrics import add_geography_keys, canonical_daypart, canonical_propagation, challenge_scores
+from dxcore.solar import _event_utc, mw_propagation
 from dxcore.stations import load_stations, stations_on_frequency
 from dxcore.store import LocalStore
+from dxcore.presentation import convert_distance, format_reception
 
 
 class StationTests(unittest.TestCase):
@@ -95,6 +100,17 @@ class GeographyTests(unittest.TestCase):
         self.assertEqual(mw_propagation(daytime, 30.36, -90.06), "Groundwave / Daytime")
         self.assertEqual(mw_propagation(nighttime, 30.36, -90.06), "Skywave / Nighttime")
 
+    def test_mw_grayline_boundaries_follow_the_published_minute_windows(self) -> None:
+        day = datetime(2026, 6, 21, tzinfo=timezone.utc).date()
+        sunrise = _event_utc(day, 30.36, -90.06, sunrise=True).replace(second=0, microsecond=0)
+        sunset = _event_utc(day, 30.36, -90.06, sunrise=False).replace(second=0, microsecond=0)
+        self.assertEqual(mw_propagation(sunrise - timedelta(minutes=60), 30.36, -90.06), "Sunrise grayline")
+        self.assertEqual(mw_propagation(sunrise + timedelta(minutes=60), 30.36, -90.06), "Sunrise grayline")
+        self.assertEqual(mw_propagation(sunrise + timedelta(minutes=61), 30.36, -90.06), "Groundwave / Daytime")
+        self.assertEqual(mw_propagation(sunset - timedelta(minutes=60), 30.36, -90.06), "Sunset grayline")
+        self.assertEqual(mw_propagation(sunset + timedelta(minutes=60), 30.36, -90.06), "Sunset grayline")
+        self.assertEqual(mw_propagation(sunset + timedelta(minutes=61), 30.36, -90.06), "Skywave / Nighttime")
+
     def test_grid_and_county_awards_use_canonical_keys(self) -> None:
         frame = add_geography_keys(
             pd.DataFrame(
@@ -113,6 +129,10 @@ class GeographyTests(unittest.TestCase):
         challenge = next(item for item in load_challenges() if item["id"] == "week_1_910_sprint")
         self.assertTrue(frequency_allowed(challenge["rules"]["frequencies"], 910.0))
         self.assertFalse(frequency_allowed(challenge["rules"]["frequencies"], 920.0))
+        self.assertEqual(
+            allowed_challenge_frequencies(challenge, [900.0, 909.0, 910.0, 920.0]),
+            [910.0],
+        )
 
     def test_challenge_station_filter_and_final_log_use_same_geography_rules(self) -> None:
         frame = pd.DataFrame(
@@ -151,8 +171,189 @@ class GeographyTests(unittest.TestCase):
             "propagation": "Tropo",
         }
         self.assertTrue(log_qualifies(log, challenge))
+        log["source"] = "bulk_import"
+        self.assertTrue(log_qualifies(log, challenge))
         log["station_country"] = "Mexico"
         self.assertFalse(log_qualifies(log, challenge))
+
+    def test_marathon_eligibility_excludes_out_of_window_logs_without_deleting_them(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "challenge_id": "season_fm",
+                    "challenge_type": "marathon",
+                    "challenge_name": "Season FM",
+                    "start_utc": "2026-09-01T00:00:00Z",
+                    "end_utc": "2026-09-10T23:59:59Z",
+                    "bands": "FM",
+                    "frequencies": "ALL",
+                    "active": "true",
+                }
+            ]
+        ).fillna("")
+        challenge = challenges_from_frame(frame)[0]
+        logs = pd.DataFrame(
+            [
+                {
+                    "log_id": "old",
+                    "band": "FM",
+                    "frequency": 94.5,
+                    "station_country": "United States",
+                    "station_region": "TX",
+                    "distance_miles": 300,
+                    "reception_utc": "2026-08-31T23:59:59Z",
+                    "propagation": "Tropo",
+                },
+                {
+                    "log_id": "eligible",
+                    "band": "FM",
+                    "frequency": 94.5,
+                    "station_country": "United States",
+                    "station_region": "TX",
+                    "distance_miles": 300,
+                    "reception_utc": "2026-09-05T12:00:00Z",
+                    "propagation": "Tropo",
+                },
+                {
+                    "log_id": "wrong-band",
+                    "band": "MW",
+                    "frequency": 910,
+                    "station_country": "United States",
+                    "station_region": "TX",
+                    "distance_miles": 300,
+                    "reception_utc": "2026-09-05T12:00:00Z",
+                    "propagation": "Skywave / Nighttime",
+                },
+            ]
+        )
+        eligible = logs_qualifying_for_challenges(logs, [challenge])
+        self.assertEqual(eligible["log_id"].tolist(), ["eligible"])
+        self.assertEqual(len(logs), 3)
+
+    def test_vectorized_challenge_rules_match_single_log_validation(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "challenge_id": "specific_fm",
+                    "challenge_type": "sprint",
+                    "challenge_name": "Specific FM",
+                    "start_utc": "2026-09-01T00:00:00Z",
+                    "end_utc": "2026-09-10T23:59:59Z",
+                    "bands": "FM",
+                    "frequencies": "94.5|100.1-100.5",
+                    "include_countries": "United States",
+                    "exclude_regions": "TX",
+                    "propagation_modes": "Tropo",
+                    "min_distance": "100",
+                    "max_distance": "500",
+                    "active": "true",
+                }
+            ]
+        ).fillna("")
+        challenge = challenges_from_frame(frame)[0]
+        valid = {
+            "band": "FM", "frequency": 94.5, "station_country": "United States",
+            "station_region": "LA", "distance_miles": 300,
+            "reception_utc": "2026-09-05T12:00:00Z", "propagation": "Tropo",
+        }
+        records = [
+            valid,
+            {**valid, "frequency": 95.1},
+            {**valid, "station_country": "Canada"},
+            {**valid, "station_region": "TX"},
+            {**valid, "distance_miles": 50},
+            {**valid, "propagation": "Sporadic E"},
+            {**valid, "reception_utc": "2026-09-11T00:00:00Z"},
+        ]
+        rows = pd.DataFrame(records)
+        expected = rows.apply(lambda row: log_qualifies(row, challenge), axis=1)
+        self.assertEqual(challenge_log_mask(rows, challenge).tolist(), expected.tolist())
+
+    def test_submission_requires_marathon_and_adds_matching_sprint_tag(self) -> None:
+        challenges = challenges_from_frame(
+            pd.DataFrame(
+                [
+                    {
+                        "challenge_id": "season_fm", "challenge_type": "marathon",
+                        "challenge_name": "Season FM", "start_utc": "2026-09-01T00:00:00Z",
+                        "end_utc": "2026-09-30T23:59:59Z", "bands": "FM",
+                        "frequencies": "ALL", "active": "true",
+                    },
+                    {
+                        "challenge_id": "sprint_945", "challenge_type": "sprint",
+                        "challenge_name": "94.5 Sprint", "start_utc": "2026-09-05T00:00:00Z",
+                        "end_utc": "2026-09-06T23:59:59Z", "bands": "FM",
+                        "frequencies": "94.5", "propagation_modes": "Tropo", "active": "true",
+                    },
+                ]
+            ).fillna("")
+        )
+        log = {
+            "band": "FM", "frequency": 94.5, "station_country": "United States",
+            "station_region": "TX", "distance_miles": 300,
+            "reception_utc": "2026-09-05T12:00:00Z", "propagation": "Tropo",
+        }
+        valid, _, sprint_names = validate_season_submission(
+            log, challenges, datetime(2026, 9, 6, tzinfo=timezone.utc)
+        )
+        self.assertTrue(valid)
+        self.assertEqual(sprint_names, ["94.5 Sprint"])
+        valid, message, _ = validate_season_submission(
+            {**log, "reception_utc": "2026-10-01T00:00:00Z"},
+            challenges,
+            datetime(2026, 10, 2, tzinfo=timezone.utc),
+        )
+        self.assertFalse(valid)
+        self.assertIn("outside", message)
+        valid, message, _ = validate_season_submission(
+            {**log, "reception_utc": "2026-09-07T00:00:00Z"},
+            challenges,
+            datetime(2026, 9, 6, tzinfo=timezone.utc),
+        )
+        self.assertFalse(valid)
+        self.assertIn("future", message)
+
+    def test_display_preferences_convert_without_changing_canonical_values(self) -> None:
+        preferences = {
+            "time_display": "Local time", "timezone_name": "America/Chicago",
+            "clock_format": "12-hour", "distance_unit": "Kilometers",
+        }
+        self.assertEqual(
+            format_reception("2026-09-05T12:00:00Z", preferences),
+            "2026-09-05 07:00 AM CDT",
+        )
+        self.assertAlmostEqual(convert_distance(100, preferences), 160.9344)
+
+    def test_mw_combined_propagation_and_daypart_match_challenge_rules(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "challenge_id": "mw_night",
+                    "challenge_type": "sprint",
+                    "challenge_name": "MW night",
+                    "start_utc": "2026-09-01T00:00:00Z",
+                    "end_utc": "2026-09-30T23:59:59Z",
+                    "bands": "MW",
+                    "frequencies": "910",
+                    "propagation_modes": "Skywave",
+                    "dayparts": "Nighttime",
+                    "active": "true",
+                }
+            ]
+        ).fillna("")
+        challenge = challenges_from_frame(frame)[0]
+        log = {
+            "band": "MW",
+            "frequency": 910,
+            "station_country": "United States",
+            "station_region": "TX",
+            "distance_miles": 400,
+            "reception_utc": "2026-09-10T07:00:00Z",
+            "propagation": "Skywave / Nighttime",
+            "source": "bulk_import",
+        }
+        self.assertEqual(canonical_propagation(log["propagation"]), "Skywave")
+        self.assertTrue(log_qualifies(log, challenge))
 
     def test_challenge_scoring_method_counts_unique_geography(self) -> None:
         rows = pd.DataFrame(
@@ -253,6 +454,22 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(scan), 1)
         self.assertEqual(scan.iloc[0]["status"], "OPEN")
 
+    def test_shoutout_read_status_is_durable_and_reversible(self) -> None:
+        updated, message = self.store.set_shoutout_read("40001", True)
+        self.assertTrue(updated)
+        self.assertIn("read on air", message)
+        status = self.store.shoutout_statuses().set_index("entry_id").loc["40001"]
+        self.assertEqual(status["read_on_air"], 1)
+        self.assertTrue(status["read_utc"])
+        sheet_row = self.store.sheet_row("Shoutout Status", "40001")
+        self.assertEqual(sheet_row["read_on_air"], 1)
+
+        updated, _ = self.store.set_shoutout_read("40001", False)
+        self.assertTrue(updated)
+        status = self.store.shoutout_statuses().set_index("entry_id").loc["40001"]
+        self.assertEqual(status["read_on_air"], 0)
+        self.assertEqual(status["read_utc"], "")
+
     def test_log_can_be_updated_and_soft_deleted_by_stable_id(self) -> None:
         reception = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
         accepted, log_id = self.store.append_log(self._log(reception))
@@ -269,6 +486,53 @@ class StoreTests(unittest.TestCase):
         deleted, _ = self.store.delete_log(self.user_id, log_id)
         self.assertTrue(deleted)
         self.assertTrue(self.store.logs(self.user_id).empty)
+
+    def test_admin_can_correct_and_promote_an_unlisted_station(self) -> None:
+        reception = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+        payload = {
+            **self._log(reception),
+            "station_id": "unlisted_test",
+            "frequency": 87.75,
+            "call": "KTEST",
+            "station_city": "Abilene",
+            "station_review_status": "Pending",
+            "source": "import_unlisted",
+        }
+        accepted, log_id = self.store.append_log(payload)
+        self.assertTrue(accepted)
+        updated, _ = self.store.admin_update_log(
+            log_id,
+            {
+                "frequency": 87.7,
+                "station_city": "Albany",
+                "propagation": "Sporadic E",
+            },
+        )
+        self.assertTrue(updated)
+        corrected = self.store.logs(self.user_id).iloc[0]
+        self.assertEqual(corrected["frequency"], 87.7)
+        self.assertEqual(corrected["station_city"], "Albany")
+        promoted, _, station_id = self.store.promote_station_override(log_id)
+        self.assertTrue(promoted)
+        self.assertEqual(station_id, "unlisted_test")
+        self.assertEqual(len(self.store.station_overrides()), 1)
+        self.assertTrue(self.store.station_review_logs().empty)
+
+    def test_station_override_can_be_edited_and_reverted(self) -> None:
+        updated, _, station_id = self.store.upsert_station_override(
+            {
+                "station_id": "fm_example", "band": "FM", "frequency": 90.7,
+                "call": "TEST-FM", "city": "New Orleans", "region": "LA",
+                "country": "United States", "county": "Orleans", "grid": "",
+                "latitude": 29.95, "longitude": -90.07, "source_log_id": "admin",
+            }
+        )
+        self.assertTrue(updated)
+        self.assertEqual(station_id, "fm_example")
+        self.assertTrue(self.store.station_overrides().iloc[0]["grid"])
+        deleted, _ = self.store.delete_station_override(station_id)
+        self.assertTrue(deleted)
+        self.assertTrue(self.store.station_overrides().empty)
 
     def test_location_with_logs_is_locked_from_deletion(self) -> None:
         accepted, _ = self.store.append_log(self._log(datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)))

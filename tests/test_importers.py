@@ -7,10 +7,12 @@ from pathlib import Path
 import pandas as pd
 
 from dxcore.importers import (
+    NOT_MAPPED,
     mapping_for_format,
     normalize_import,
     parse_reception,
     read_upload,
+    resolve_matching_review_rows,
     resolve_review_station,
     unlisted_station_id,
 )
@@ -79,6 +81,28 @@ class UploadParsingTests(unittest.TestCase):
             timezone_name="America/Chicago",
         )
         self.assertEqual(parsed, datetime(2024, 3, 10, 7, 30, tzinfo=timezone.utc))
+
+    def test_generic_form_timestamp_does_not_override_reception_fields(self) -> None:
+        frame = pd.DataFrame(
+            [{
+                "Timestamp": "12/6/2023 8:27:02",
+                "Date of Reception": "12/6/2023",
+                "Time of Reception": "02:25:00",
+                "Time of Day": "Nighttime",
+                "Frequency": "550",
+                "Callsign": "YVKE",
+            }]
+        )
+        mapping = mapping_for_format("Custom", frame.columns)
+        self.assertEqual(mapping["timestamp"], NOT_MAPPED)
+        parsed = parse_reception(
+            frame.iloc[0],
+            mapping,
+            date_order="MDY",
+            time_protocol="Local",
+            timezone_name="America/Chicago",
+        )
+        self.assertEqual(parsed, datetime(2023, 12, 6, 8, 25, tzinfo=timezone.utc))
 
 
 class NormalizationTests(unittest.TestCase):
@@ -189,6 +213,45 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(resolved.iloc[0]["station_review_status"], "Pending")
         self.assertEqual(resolved.iloc[0]["source"], "import_unlisted")
 
+    def test_mw_custom_import_recalculates_daypart_from_qth_and_reception(self) -> None:
+        frame = pd.DataFrame(
+            [{
+                "Frequency": "550", "Callsign": "YVKE", "City": "Caracas",
+                "Region": "DX", "Country": "Venezuela", "Date": "12/6/2023",
+                "Time": "02:25:00", "Time of Day": "Daytime",
+            }]
+        )
+        mapping = {
+            "frequency": "Frequency", "call": "Callsign", "city": "City",
+            "region": "Region", "country": "Country", "date": "Date",
+            "time": "Time", "timestamp": NOT_MAPPED, "propagation": "Time of Day",
+        }
+        review = normalize_import(
+            frame, source_format="Custom", mapping=mapping, date_order="MDY",
+            time_protocol="Local", timezone_name="America/Chicago", fixed_band="MW",
+            default_propagation="Other", default_is_sdr=True, default_is_portable=False,
+            user_id="user", location=LOCATION, stations=STATIONS,
+            existing_logs=pd.DataFrame(),
+        )
+        self.assertEqual(review.iloc[0]["reception_utc"], "2023-12-06T08:25:00+00:00")
+        self.assertEqual(review.iloc[0]["propagation"], "Skywave / Nighttime")
+
+    def test_one_station_decision_resolves_all_matching_held_rows(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {"Propa": "Tropo", "Date": "28.06.21", "UTC": "0000", "MHz": "94.50", "ITU": "USA", "Program": "The Buzz", "Location": "Houston", "Reg": "TX"},
+                {"Propa": "Tropo", "Date": "29.06.21", "UTC": "0010", "MHz": "94.50", "ITU": "USA", "Program": "The Buzz", "Location": "Houston", "Reg": "TX"},
+            ]
+        )
+        review = self._normalize(frame, "FMList")
+        resolved, count = resolve_matching_review_rows(
+            review, review.index[0], STATIONS.iloc[0].to_dict(),
+            location=LOCATION, existing_logs=pd.DataFrame(),
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(resolved["status"].tolist(), ["Ready", "Ready"])
+        self.assertEqual(resolved["station_id"].tolist(), ["fm_ktbz", "fm_ktbz"])
+
 
 class BatchStoreTests(unittest.TestCase):
     database = Path("tests/.dx_import_test.sqlite3")
@@ -222,12 +285,41 @@ class BatchStoreTests(unittest.TestCase):
             "import_batch_id": "batch_test",
         }
         rows = [
-            {**common, "reception_utc": "2026-06-01T00:00:00+00:00"},
-            {**common, "reception_utc": "2026-06-01T00:04:00+00:00"},
+            {**common, "reception_utc": "2026-09-05T03:00:00+00:00"},
+            {**common, "reception_utc": "2026-09-05T03:04:00+00:00"},
         ]
         result = store.append_logs(rows)
         self.assertEqual(result["accepted"], 1)
         self.assertEqual(result["rejected"], 1)
+
+    def test_pending_import_review_is_durable_and_status_can_change(self) -> None:
+        self.database.unlink(missing_ok=True)
+        store = LocalStore(self.database)
+        store.record_import_batch(
+            batch_id="batch_pending", user_id="user", filename="upload.csv",
+            source_format="Custom", date_protocol="MDY", time_protocol="UTC",
+            timezone_name="UTC", row_count=1, accepted_count=0,
+            status="Review pending",
+        )
+        review = pd.DataFrame(
+            [
+                {
+                    "source_row": 4, "status": "Needs review", "selected": False,
+                    "source_station": "UNKNOWN", "source_city": "Somewhere",
+                    "source_region": "LA", "source_country": "United States",
+                    "source_county": "", "source_grid": "", "frequency": 99.9,
+                    "band": "FM", "reception_utc": "2026-09-05T03:00:00Z",
+                    "location_id": "qth_test", "message": "No safe match",
+                }
+            ]
+        )
+        review_ids = store.save_import_review_rows("batch_pending", review, {"Needs review"})
+        self.assertEqual(len(review_ids), 1)
+        persisted = store.import_review_rows("user")
+        self.assertEqual(persisted.iloc[0]["filename"], "upload.csv")
+        self.assertIn("UNKNOWN", persisted.iloc[0]["normalized_json"])
+        self.assertEqual(store.update_import_review_status(review_ids, "Ready"), 1)
+        self.assertEqual(store.import_review_rows("user").iloc[0]["status"], "Ready")
 
     def test_display_name_change_updates_the_single_remote_user_record(self) -> None:
         class FakeMirror:
