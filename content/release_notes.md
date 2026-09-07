@@ -1,3 +1,8 @@
+### Version 1.0.0-rc10.2 · Production isolation hotfix
+
+- Made the production Google Sheet authoritative during startup, including intentionally empty tabs, so cleared beta records cannot survive in or be restored from the fast local cache.
+- Preserved staging's safe tab-seeding behavior for demonstrations and schema upgrades while keeping its cache and Google Sheet isolated from production.
+
 ### Version 1.0.0-rc10.1 · Station correction and map hotfix
 
 - Made administrator station-database corrections cascade into existing reception records, including corrected coordinates, grid, station details, and recalculated QTH distance; the repaired records are mirrored back to Google Sheets.
