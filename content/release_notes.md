@@ -1,3 +1,11 @@
+### Version 1.0.0-rc10 · Final beta safeguards and preferences
+
+- Enforced one authoritative reception boundary at final save: every entry must qualify for an enabled Season 7 marathon, future timestamps are rejected, and qualifying weekly sprints are classified independently using their full rules.
+- Applied the same season scope to previously-heard station indicators and Bandscan reception history.
+- Added an IANA time-zone selector for local-time imports, clearer unlisted-station approval, and durable Pending Logs that can be resolved later without uploading the file again.
+- Added administrator-managed station database corrections without modifying the licensed source files.
+- Added profile choices for UTC or local-time display, 24- or 12-hour clocks, and miles or kilometers while retaining canonical UTC/miles storage.
+
 ### Version 1.0.0-rc9.1 · Season scope, achievements, and environment split
 
 - Made My Logbook, its personal export, and every Stats view use the same enabled Season 7 marathon boundary as Awards and season leaderboards; imported out-of-season archive logs remain stored but excluded.
