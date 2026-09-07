@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
+from zoneinfo import available_timezones
 
 import pandas as pd
 import streamlit as st
 from geopy.geocoders import Nominatim
 
-from app_support import get_station_data, get_store
+from app_support import configured_challenges, get_station_data, get_store
 from dxcore.geo import grid_to_latlon, latlon_to_grid
 from dxcore.importers import (
     NOT_MAPPED,
@@ -39,6 +41,30 @@ MAPPING_LABELS = {
     "is_sdr": "SDR used",
     "is_portable": "Portable operation",
 }
+
+COMMON_TIMEZONES = [
+    "UTC",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Phoenix",
+    "America/Los_Angeles",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+    "America/Toronto",
+    "America/Winnipeg",
+    "America/Edmonton",
+    "America/Vancouver",
+    "Europe/London",
+    "Europe/Paris",
+    "Australia/Sydney",
+]
+
+
+@st.cache_data
+def timezone_options() -> list[str]:
+    choices = set(available_timezones())
+    return [*COMMON_TIMEZONES, *sorted(choices.difference(COMMON_TIMEZONES))]
 
 
 def clear_import_state() -> None:
@@ -113,6 +139,7 @@ def _review_held_rows(
     review_key: str,
     file_token: str,
     location: dict[str, object],
+    batch_id: str = "",
 ) -> None:
     held = review[review["status"] == "Needs review"]
     if held.empty:
@@ -189,6 +216,10 @@ def _review_held_rows(
                         existing_logs=get_store().logs(st.session_state.user["user_id"]),
                     )
                     st.session_state[review_key] = resolved
+                    if batch_id:
+                        get_store().save_import_review_rows(
+                            batch_id, resolved, {"Needs review", "Ready"}
+                        )
                     st.session_state[f"{review_key}_resolution_notice"] = (
                         f"Applied the canonical station to {count:,} matching held row(s)."
                     )
@@ -196,10 +227,15 @@ def _review_held_rows(
         else:
             st.caption("No safe station-list suggestion was found for this row.")
 
+        st.divider()
+        st.warning(
+            "**Station not in the list?** You can approve the uploaded details as an "
+            "unlisted station. It will be accepted into your log and clearly queued for administrator review."
+        )
         unlisted = st.toggle(
-            "Approve as an unlisted station",
+            "Review and approve this uploaded station as unlisted",
             key=f"bulk_import_unlisted_toggle_{file_token}_{row_index}",
-            help="Use this only after checking the uploaded station details. The resulting reception is flagged for administrator review.",
+            help="Use this after checking the uploaded station name and location.",
         )
         if unlisted:
             with st.form(f"bulk_import_unlisted_form_{file_token}_{row_index}"):
@@ -264,6 +300,10 @@ def _review_held_rows(
                         unlisted=True,
                     )
                     st.session_state[review_key] = resolved
+                    if batch_id:
+                        get_store().save_import_review_rows(
+                            batch_id, resolved, {"Needs review", "Ready"}
+                        )
                     st.session_state[f"{review_key}_resolution_notice"] = (
                         f"Approved {count:,} matching held row(s) as the same unlisted station."
                     )
@@ -354,17 +394,21 @@ def render_import_console(location: dict[str, object]) -> None:
                 key=time_protocol_key,
             )
             time_protocol = "UTC" if time_label == "UTC" else "Local"
+        zones = timezone_options()
         browser_zone = str(getattr(st.context, "timezone", "") or "America/Chicago")
+        if browser_zone not in zones:
+            browser_zone = "America/Chicago"
         timezone_key = f"bulk_import_timezone_{file_token}"
         protocol_state_key = f"{timezone_key}_protocol"
         if st.session_state.get(protocol_state_key) != time_protocol:
             st.session_state[timezone_key] = "UTC" if time_protocol == "UTC" else browser_zone
             st.session_state[protocol_state_key] = time_protocol
-        timezone_name = first[2].text_input(
+        timezone_name = first[2].selectbox(
             "IANA time zone",
+            zones,
             disabled=time_protocol == "UTC",
             key=timezone_key,
-            help="Examples: America/Chicago, America/New_York, Europe/London.",
+            help="Choose the time zone used by the uploaded local timestamps. Daylight-saving changes are applied automatically.",
         )
         second = st.columns(4)
         fixed_band = second[0].selectbox(
@@ -437,7 +481,31 @@ def render_import_console(location: dict[str, object]) -> None:
                 location=location,
                 stations=get_station_data(),
                 existing_logs=store.logs(st.session_state.user["user_id"]),
+                challenges=configured_challenges(),
             )
+        batch_id = import_batch_id(
+            st.session_state.user["user_id"], uploaded.name, datetime.now(timezone.utc)
+        )
+        review["review_id"] = ""
+        store.record_import_batch(
+            batch_id=batch_id,
+            user_id=st.session_state.user["user_id"],
+            filename=uploaded.name,
+            source_format=source_format,
+            date_protocol=date_order,
+            time_protocol=time_protocol,
+            timezone_name=timezone_name or "UTC",
+            row_count=len(review),
+            accepted_count=0,
+            status="Review pending",
+        )
+        store.save_import_review_rows(batch_id, review, {"Needs review"})
+        persisted = store.import_review_rows(st.session_state.user["user_id"])
+        persisted = persisted[persisted["batch_id"].astype(str) == batch_id]
+        review_id_by_row = dict(
+            zip(persisted["source_row"].astype(int), persisted["review_id"].astype(str), strict=False)
+        )
+        review["review_id"] = review["source_row"].astype(int).map(review_id_by_row).fillna("")
         st.session_state[review_key] = review
         st.session_state[f"{review_key}_settings"] = {
             "source_format": source_format,
@@ -445,6 +513,7 @@ def render_import_console(location: dict[str, object]) -> None:
             "time_protocol": time_protocol,
             "timezone_name": timezone_name or "UTC",
             "filename": uploaded.name,
+            "batch_id": batch_id,
         }
 
     review = st.session_state.get(review_key)
@@ -490,6 +559,7 @@ def render_import_console(location: dict[str, object]) -> None:
         review_key=review_key,
         file_token=file_token,
         location=location,
+        batch_id=str(st.session_state.get(f"{review_key}_settings", {}).get("batch_id", "")),
     )
     selected_count = int(((review["status"] == "Ready") & review["selected"]).sum())
 
@@ -505,7 +575,7 @@ def render_import_console(location: dict[str, object]) -> None:
         key=f"bulk_import_commit_{file_token}",
     ):
         settings = st.session_state.get(f"{review_key}_settings", {})
-        batch_id = import_batch_id(
+        batch_id = str(settings.get("batch_id", "")) or import_batch_id(
             st.session_state.user["user_id"], uploaded.name, datetime.now(timezone.utc)
         )
         payloads = log_payloads(review, batch_id)
@@ -522,6 +592,12 @@ def render_import_console(location: dict[str, object]) -> None:
             accepted_count=int(result["accepted"]),
             status="Completed" if not result["rejected"] else "Completed with duplicates",
         )
+        imported_review_ids = [
+            str(value)
+            for value in review.loc[review["selected"], "review_id"].tolist()
+            if str(value).strip()
+        ] if "review_id" in review.columns else []
+        get_store().update_import_review_status(imported_review_ids, "Imported")
         st.session_state[f"bulk_import_result_{file_token}"] = result
         review.loc[review["selected"], "selected"] = False
         st.session_state[review_key] = review
@@ -532,3 +608,159 @@ def render_import_console(location: dict[str, object]) -> None:
             f"Imported {int(result['accepted']):,} reception(s); "
             f"{int(result['rejected']):,} row(s) were rejected by the final duplicate guard."
         )
+
+
+def render_pending_import_reviews() -> None:
+    """Render durable held importer rows from prior uploads."""
+    store = get_store()
+    user_id = st.session_state.user["user_id"]
+    persisted = store.import_review_rows(user_id)
+    st.subheader("Pending logs")
+    if persisted.empty:
+        st.caption("No uploaded receptions are waiting for station review.")
+        return
+
+    batches = (
+        persisted[["batch_id", "filename", "created_utc"]]
+        .drop_duplicates("batch_id")
+        .to_dict("records")
+    )
+    batch_lookup = {str(row["batch_id"]): row for row in batches}
+    selected_batch_id = st.selectbox(
+        "Pending upload",
+        list(batch_lookup),
+        format_func=lambda value: (
+            f"{batch_lookup[value]['filename']} · "
+            f"{pd.to_datetime(batch_lookup[value]['created_utc'], utc=True).strftime('%Y-%m-%d %H:%M UTC')}"
+        ),
+        key="pending_import_batch",
+    )
+    selected = persisted[persisted["batch_id"].astype(str) == selected_batch_id].copy()
+    normalized: list[dict[str, object]] = []
+    for record in selected.to_dict("records"):
+        try:
+            row = json.loads(str(record["normalized_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            row = {}
+        row.update(
+            {
+                "review_id": record["review_id"],
+                "source_row": record["source_row"],
+                "status": record["status"],
+                "message": record["message"],
+                "selected": False,
+            }
+        )
+        normalized.append(row)
+    review = pd.DataFrame(normalized)
+    if review.empty:
+        st.caption("This upload has no remaining review rows.")
+        return
+
+    locations = store.locations(user_id)
+    location_id = str(review.iloc[0].get("location_id", ""))
+    location_rows = locations[locations["location_id"].astype(str) == location_id]
+    if location_rows.empty:
+        st.error(
+            "The receiving location used by this upload is no longer available. "
+            "Please submit a support ticket before importing these rows."
+        )
+        return
+    location = location_rows.iloc[0].to_dict()
+    file_token = f"saved_{selected_batch_id[-12:]}"
+    review_key = f"pending_import_review_{selected_batch_id}"
+    st.caption(
+        f"{len(review):,} reception(s) from **{batch_lookup[selected_batch_id]['filename']}** "
+        "are safely retained. Resolve them here without uploading the file again."
+    )
+    _status_metrics(review)
+    _review_held_rows(
+        review,
+        review_key=review_key,
+        file_token=file_token,
+        location=location,
+        batch_id=selected_batch_id,
+    )
+
+    ready = review[review["status"] == "Ready"].copy()
+    if ready.empty:
+        st.info("Resolve a held row above to make it ready for import.")
+    else:
+        st.markdown("**Resolved and ready**")
+        ready["selected"] = True
+        display_columns = [
+            "selected", "source_row", "band", "frequency", "call", "station_city",
+            "station_region", "station_country", "reception_utc", "propagation",
+        ]
+        editor = st.data_editor(
+            ready[[column for column in display_columns if column in ready.columns]],
+            hide_index=True,
+            num_rows="fixed",
+            disabled=[column for column in display_columns if column != "selected"],
+            key=f"pending_import_ready_{selected_batch_id}",
+            column_config={
+                "selected": st.column_config.CheckboxColumn("Import", pinned=True),
+                "source_row": st.column_config.NumberColumn("Source row", format="%d"),
+                "reception_utc": st.column_config.DatetimeColumn(
+                    "Reception (UTC)", format="YYYY-MM-DD HH:mm"
+                ),
+            },
+        )
+        ready["selected"] = editor["selected"].astype(bool).to_numpy()
+        selected_count = int(ready["selected"].sum())
+        confirmed = st.checkbox(
+            f"I reviewed the {selected_count:,} selected resolved row(s).",
+            key=f"pending_import_confirm_{selected_batch_id}",
+        )
+        if st.button(
+            f"Import {selected_count:,} resolved reception(s)",
+            icon=":material/publish:",
+            type="primary",
+            disabled=not confirmed or selected_count == 0,
+            key=f"pending_import_commit_{selected_batch_id}",
+        ):
+            accepted_review_ids: list[str] = []
+            rejection_messages: list[str] = []
+            for _, row in ready[ready["selected"]].iterrows():
+                payload = log_payloads(pd.DataFrame([row]), selected_batch_id)[0]
+                accepted, message = store.append_log(payload)
+                if accepted:
+                    accepted_review_ids.append(str(row["review_id"]))
+                else:
+                    rejection_messages.append(message)
+            store.update_import_review_status(accepted_review_ids, "Imported")
+            st.session_state.pending_import_notice = (
+                f"Imported {len(accepted_review_ids):,} resolved reception(s)."
+            )
+            if rejection_messages:
+                st.session_state.pending_import_errors = rejection_messages
+            st.rerun()
+
+    dismiss_options = review[review["status"] == "Needs review"]
+    if not dismiss_options.empty:
+        with st.expander("Dismiss rows I do not want to import"):
+            dismiss_ids = st.multiselect(
+                "Held rows",
+                dismiss_options["review_id"].astype(str).tolist(),
+                format_func=lambda value: (
+                    lambda row: f"Row {int(row['source_row'])}: {row.get('source_station', '')}"
+                )(
+                    dismiss_options[
+                        dismiss_options["review_id"].astype(str) == value
+                    ].iloc[0]
+                ),
+                key=f"pending_import_dismiss_{selected_batch_id}",
+            )
+            if st.button(
+                "Dismiss selected pending rows",
+                icon=":material/delete_sweep:",
+                disabled=not dismiss_ids,
+                key=f"pending_import_dismiss_button_{selected_batch_id}",
+            ):
+                store.update_import_review_status(dismiss_ids, "Dismissed")
+                st.rerun()
+
+    if notice := st.session_state.pop("pending_import_notice", None):
+        st.success(notice)
+    if errors := st.session_state.pop("pending_import_errors", None):
+        st.warning("Some resolved rows were not imported: " + " · ".join(errors[:3]))

@@ -15,6 +15,7 @@ import streamlit as st
 
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.metrics import add_geography_keys, normalize_county
+from dxcore.presentation import display_log_table
 from dxcore.subdivisions import (
     add_subdivision_keys,
     subdivision_counts,
@@ -532,4 +533,8 @@ def render_challenge_dashboard(
         "station_country", "station_county", "station_grid", "distance_miles", "propagation",
         "is_sdr", "is_portable", "notes",
     ]
-    st.dataframe(table[safe_columns], hide_index=True, key=f"{prefix}_receptions")
+    st.dataframe(
+        display_log_table(table[safe_columns], st.session_state.user),
+        hide_index=True,
+        key=f"{prefix}_receptions",
+    )
