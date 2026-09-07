@@ -14,7 +14,7 @@ import pydeck as pdk
 import streamlit as st
 
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
-from dxcore.metrics import add_geography_keys, normalize_county
+from dxcore.metrics import add_geography_keys, normalize_county, valid_station_coordinates
 from dxcore.presentation import display_log_table
 from dxcore.subdivisions import (
     add_subdivision_keys,
@@ -485,7 +485,7 @@ def render_challenge_dashboard(
                     st.session_state[f"{prefix}_pending_county"] = county_key
                     st.rerun()
     else:
-        points = unique_logs.dropna(subset=["station_latitude", "station_longitude"]).copy()
+        points = valid_station_coordinates(unique_logs)
         if points.empty:
             st.caption("No station coordinates are available for this view.")
         else:
@@ -502,7 +502,7 @@ def render_challenge_dashboard(
                         continue
                     qth = location_lookup.loc[record["location_id"]]
                     color = BAND_COLORS.get(str(record["band"]), BAND_COLORS["MW"])
-                    paths.append({"source": [float(qth["longitude"]), float(qth["latitude"])], "target": [record["station_longitude"], record["station_latitude"]], "color": color, "band": record["band"], "call": record["call"]})
+                    paths.append({"source": [float(qth["longitude"]), float(qth["latitude"])], "target": [float(record["station_longitude"]), float(record["station_latitude"])], "color": color, "band": record["band"], "call": record["call"]})
                     qths[str(record["location_id"])] = {"longitude": float(qth["longitude"]), "latitude": float(qth["latitude"]), "label": qth["label"]}
                 layers.append(pdk.Layer("ArcLayer", id="challenge-paths", data=paths, get_source_position="source", get_target_position="target", get_source_color="color", get_target_color="color", get_width=1, width_min_pixels=1, width_max_pixels=2, pickable=True))
                 layers.append(pdk.Layer("ScatterplotLayer", id="challenge-dxer-locations", data=list(qths.values()), get_position="[longitude, latitude]", get_radius=500, radius_min_pixels=2, radius_max_pixels=3, stroked=True, get_fill_color=[255, 255, 255, 210], get_line_color=[10, 20, 30, 240], line_width_min_pixels=1, pickable=True))
