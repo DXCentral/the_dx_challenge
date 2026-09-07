@@ -5,7 +5,14 @@ from datetime import date, datetime, time, timezone
 import pandas as pd
 import streamlit as st
 
-from app_support import display_names, get_station_data, get_store, require_admin_access
+from app_support import (
+    app_environment,
+    configured_spreadsheet_id,
+    display_names,
+    get_station_data,
+    get_store,
+    require_admin_access,
+)
 from dxcore.content import parse_frequency_spec
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.metrics import canonical_daypart
@@ -54,6 +61,9 @@ store = get_store()
 st.title("Administration")
 st.caption(
     "Manage public content, challenge criteria, support tickets, and unlisted-station review. Every save is mirrored to the private Google Sheet when durable sync is active."
+)
+st.caption(
+    f"Current target: {app_environment().title()} · private Google Sheet …{configured_spreadsheet_id()[-8:]}"
 )
 if notice := st.session_state.pop("admin_notice", None):
     st.toast(notice)
@@ -282,7 +292,10 @@ elif section == "Challenges":
                     "active": active,
                 }
             )
-            st.session_state.admin_notice = f"Challenge {challenge_id} saved."
+            st.session_state.admin_notice = (
+                f"Challenge {challenge_id} saved to {app_environment().title()} "
+                f"Sheet …{configured_spreadsheet_id()[-8:]}."
+            )
             st.rerun()
         except (TypeError, ValueError) as error:
             st.error(str(error))
