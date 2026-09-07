@@ -1,3 +1,7 @@
+### Version 1.0.0-rc10.5 · User guide access
+
+- Added a prominent Community-page button that opens the complete illustrated Version 1.0 user guide directly from its permanent GitHub release URL.
+
 ### Version 1.0.0-rc10.4 · Challenge environment isolation
 
 - Keyed the cached Google Sheet connection by environment, Sheet ID, write setting, and service-account identity so a deployment can never retain a client created from another Secrets configuration.
