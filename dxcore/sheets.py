@@ -135,13 +135,17 @@ class GoogleSheetMirror:
         if match is not None and match.row > 1:
             worksheet.delete_rows(match.row)
 
-    def bootstrap(self, local: LocalStore) -> None:
+    def bootstrap(
+        self, local: LocalStore, *, remote_is_authoritative: bool = False
+    ) -> None:
         # Remote data wins when present. A brand-new managed tab is seeded from
         # the current local cache so a deployment upgrade does not discard the
         # owner's existing staging records.
         for sheet_name in SHEET_TABLES:
             remote_rows = self.rows(sheet_name)
-            if remote_rows:
+            if remote_is_authoritative:
+                local.replace_sheet_rows(sheet_name, remote_rows)
+            elif remote_rows:
                 local.merge_sheet_rows(sheet_name, remote_rows)
             else:
                 self.upsert_rows(sheet_name, local.sheet_rows(sheet_name))
@@ -150,13 +154,22 @@ class GoogleSheetMirror:
 class HybridStore:
     """Fast local reads plus guarded, durable Google Sheet writes."""
 
-    def __init__(self, local: LocalStore, mirror: GoogleSheetMirror) -> None:
+    def __init__(
+        self,
+        local: LocalStore,
+        mirror: GoogleSheetMirror,
+        *,
+        environment: str = "staging",
+    ) -> None:
         self.local = local
         self.mirror = mirror
         self.sync_error = ""
         self._pending_sync: dict[str, set[str]] = {}
         try:
-            self.mirror.bootstrap(self.local)
+            self.mirror.bootstrap(
+                self.local,
+                remote_is_authoritative=str(environment).strip().lower() == "production",
+            )
             changed_log_ids = self.local.refresh_logs_from_station_overrides()
             if changed_log_ids:
                 self._sync(
