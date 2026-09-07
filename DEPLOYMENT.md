@@ -40,7 +40,7 @@ redirect_uri = "https://thedxchallenge.streamlit.app/oauth2callback"
 
 # Staging app Secrets (in the separate staging app, not in the same TOML file)
 [auth]
-redirect_uri = "https://thedxchallenge-staging.streamlit.app/oauth2callback"
+redirect_uri = "https://thedxchallenge-stage.streamlit.app/oauth2callback"
 ```
 
 Add both exact values to the Google OAuth client's **Authorized redirect URIs**.
@@ -88,9 +88,14 @@ read-on-air flags; the published WPForms response feed remains read-only.
 
 ## Keep staging and production isolated
 
+| Environment | App URL | Google Sheet ID |
+|---|---|---|
+| Staging | `https://thedxchallenge-stage.streamlit.app/` | `1Z0C_bnxCgVMWdhP26MbvKqsGCNcCab0zeSQiIpJzn2A` |
+| Production | `https://thedxchallenge.streamlit.app/` | `1EMPxrbrNZlrq2BzbqdBNeW8ZFVTR325Q_hztMJ7hAO8` |
+
 1. Preserve the current beta Google Sheet as the staging data store; do not delete its logs.
 2. Create a `staging` branch in GitHub and deploy it as a second Streamlit app, for
-   example `thedxchallenge-staging.streamlit.app`.
+   `thedxchallenge-stage.streamlit.app`.
 3. Copy the existing staging secrets to that app, keeping the current staging Sheet ID
    and changing `auth.redirect_uri` to the staging app's `/oauth2callback` URL.
 4. Add that redirect URI in the Google OAuth client alongside the production URI.

@@ -15,6 +15,7 @@ from dxcore.config import (
     DEFAULT_USER_ID,
     DEFAULT_USER_NAME,
     LOCAL_DB_PATH,
+    PRODUCTION_SPREADSHEET_ID,
     STAGING_SPREADSHEET_ID,
 )
 from dxcore.content import (
@@ -31,7 +32,52 @@ from dxcore.themes import theme_css
 LOGGER = logging.getLogger(__name__)
 
 
+def environment_sheet_mismatch(environment: str, spreadsheet_id: str) -> str:
+    """Block the two known deployment data stores from ever being crossed."""
+    normalized = str(environment).strip().lower()
+    target = str(spreadsheet_id).strip()
+    if normalized == "staging" and target == PRODUCTION_SPREADSHEET_ID:
+        return "Staging is configured with the production Google Sheet ID."
+    if normalized == "production" and target == STAGING_SPREADSHEET_ID:
+        return "Production is configured with the staging Google Sheet ID."
+    return ""
+
+
 @st.cache_resource
+def _cached_store(
+    environment: str,
+    spreadsheet_id: str,
+    writes_enabled: bool,
+    credential_identity: str,
+    _credentials: dict[str, object],
+) -> LocalStore:
+    """Build one durable store per explicit deployment identity."""
+    cache_label = re.sub(r"[^a-z0-9_-]+", "-", environment or "staging").strip("-")
+    if spreadsheet_id:
+        cache_label = f"{cache_label}_{spreadsheet_id[-12:]}"
+    local = LocalStore(
+        LOCAL_DB_PATH.with_name(f"dx_challenge_{cache_label or 'local'}_v1.sqlite3")
+    )
+    mismatch = environment_sheet_mismatch(environment, spreadsheet_id)
+    if mismatch:
+        local.sync_error = f"EnvironmentSheetMismatch: {mismatch}"
+        return local
+    if not writes_enabled or not credential_identity or not _credentials:
+        return local
+    try:
+        from dxcore.sheets import GoogleSheetMirror, HybridStore
+
+        return HybridStore(
+            local,
+            GoogleSheetMirror(_credentials, spreadsheet_id or STAGING_SPREADSHEET_ID),
+            environment=environment,
+        )
+    except Exception as error:
+        LOGGER.exception("Google Sheet store initialization failed")
+        local.sync_error = f"{type(error).__name__}: {error}"
+        return local
+
+
 def get_store() -> LocalStore:
     try:
         app_settings = st.secrets.get("app", {})
@@ -41,34 +87,24 @@ def get_store() -> LocalStore:
         ).strip()
         writes_enabled = bool(app_settings.get("writes_enabled", True))
     except (FileNotFoundError, AttributeError, TypeError):
-        app_settings = {}
         environment = "local"
         spreadsheet_id = ""
         writes_enabled = False
-    cache_label = re.sub(r"[^a-z0-9_-]+", "-", environment or "staging").strip("-")
-    if spreadsheet_id:
-        cache_label = f"{cache_label}_{spreadsheet_id[-12:]}"
-    local = LocalStore(
-        LOCAL_DB_PATH.with_name(f"dx_challenge_{cache_label or 'local'}_v1.sqlite3")
-    )
     try:
         credentials = dict(st.secrets["gcp_service_account"])
     except (FileNotFoundError, KeyError):
-        return local
-    if not writes_enabled:
-        return local
-    try:
-        from dxcore.sheets import GoogleSheetMirror, HybridStore
-
-        return HybridStore(
-            local,
-            GoogleSheetMirror(credentials, spreadsheet_id or STAGING_SPREADSHEET_ID),
-            environment=environment,
-        )
-    except Exception as error:
-        LOGGER.exception("Google Sheet store initialization failed")
-        local.sync_error = f"{type(error).__name__}: {error}"
-        return local
+        credentials = {}
+    credential_identity = "|".join(
+        str(credentials.get(field, "")).strip()
+        for field in ("project_id", "client_email", "private_key_id")
+    )
+    return _cached_store(
+        environment,
+        spreadsheet_id,
+        writes_enabled,
+        credential_identity,
+        _credentials=credentials,
+    )
 
 
 @st.cache_data
@@ -217,6 +253,24 @@ def configured_spreadsheet_id() -> str:
     except (FileNotFoundError, AttributeError, TypeError):
         value = STAGING_SPREADSHEET_ID
     return value or STAGING_SPREADSHEET_ID
+
+
+def sheet_sync_diagnostic(error: object) -> str:
+    """Return a useful status without exposing Google response payloads or secrets."""
+    value = str(error or "")
+    upper = value.upper()
+    if "ENVIRONMENTSHEETMISMATCH" in upper:
+        return "Diagnostic: environment safety check blocked a staging/production Sheet mismatch."
+    if "429" in value or "RESOURCE_EXHAUSTED" in upper or "QUOTA" in upper:
+        return "Diagnostic: Google Sheets request quota temporarily exceeded (HTTP 429)."
+    if "403" in value or "PERMISSION_DENIED" in upper:
+        return "Diagnostic: Google Sheets denied access (HTTP 403); verify the service account is an Editor."
+    if "404" in value or "SPREADSHEETNOTFOUND" in upper:
+        return "Diagnostic: the configured Google Sheet was not found (HTTP 404); verify its ID and sharing."
+    if "503" in value or "SERVICE_UNAVAILABLE" in upper:
+        return "Diagnostic: Google Sheets is temporarily unavailable (HTTP 503)."
+    error_type = value.partition(":")[0].strip()
+    return f"Diagnostic: {error_type or 'Google Sheet synchronization error'}."
 
 
 def require_admin_access() -> None:
@@ -395,9 +449,11 @@ def render_app_bar() -> None:
     store = get_store()
     pending_sync = int(getattr(store, "pending_sync_count", 0))
     if getattr(store, "sync_enabled", False) and not getattr(store, "sync_error", "") and not pending_sync:
+        connected_id = str(getattr(store, "connected_spreadsheet_id", "")).strip()
+        shown_id = connected_id or configured_spreadsheet_id()
         st.caption(
             f"{app_environment().title()} · private Google Sheet "
-            f"{configured_spreadsheet_id()[-8:]} · durable sync active"
+            f"{shown_id[-8:]} · durable sync active"
         )
     elif getattr(store, "sync_error", "") or pending_sync:
         st.warning(
@@ -406,6 +462,7 @@ def render_app_bar() -> None:
             "and the change appears in the Sheet, no further action is needed.",
             icon=":material/cloud_off:",
         )
+        st.caption(sheet_sync_diagnostic(getattr(store, "sync_error", "")))
         if hasattr(store, "retry_sync") and st.button(
             "Retry Google Sheet sync", icon=":material/sync:", key="retry_sheet_sync"
         ):
