@@ -11,7 +11,7 @@ import streamlit as st
 
 from app_support import display_names, get_store, season_eligible_logs, season_marathons
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
-from dxcore.metrics import add_geography_keys, normalize_county
+from dxcore.metrics import add_geography_keys, normalize_county, valid_station_coordinates
 from dxcore.presentation import display_log_table
 from dxcore.subdivisions import subdivision_counts, subdivision_figure
 from dxcore.themes import THEMES
@@ -578,7 +578,9 @@ elif map_view == "Logs by county":
                     st.session_state.stats_pending_county = county_key
                     st.rerun()
 elif map_view in {"Station locations", "Paths"}:
-    points = unique_logs.dropna(subset=["station_latitude", "station_longitude"]).copy()
+    points = valid_station_coordinates(unique_logs)
+    if points.empty:
+        st.info("No valid station coordinates are available for this map.")
     grouped = (
         points.groupby(
             ["band", "station_id", "call", "station_city", "station_region", "frequency", "station_latitude", "station_longitude"],
@@ -602,7 +604,7 @@ elif map_view in {"Station locations", "Paths"}:
             path_rows.append(
                 {
                     "source": [float(qth["longitude"]), float(qth["latitude"])],
-                    "target": [row["station_longitude"], row["station_latitude"]],
+                    "target": [float(row["station_longitude"]), float(row["station_latitude"])],
                     "color": color,
                     "band": row["band"],
                     "call": row["call"],
@@ -660,8 +662,8 @@ elif map_view in {"Station locations", "Paths"}:
     )
     st.markdown(":blue-badge[MW · cyan] :green-badge[FM · green] :orange-badge[NWR · orange]")
     view = pdk.ViewState(
-        latitude=float(grouped["station_latitude"].mean()),
-        longitude=float(grouped["station_longitude"].mean()),
+        latitude=float(grouped["station_latitude"].mean()) if not grouped.empty else 20.0,
+        longitude=float(grouped["station_longitude"].mean()) if not grouped.empty else -30.0,
         zoom=2.5,
     )
     st.pydeck_chart(
