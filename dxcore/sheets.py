@@ -15,6 +15,11 @@ from dxcore.store import LocalStore, SHEET_TABLES
 
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+ENVIRONMENT_CONFIGURATION_SHEETS = {
+    "Announcements",
+    "Challenges",
+    "Station Overrides",
+}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -41,35 +46,40 @@ class GoogleSheetMirror:
             service_account_info, scopes=SCOPES
         )
         self.client = gspread.authorize(credentials)
+        self.spreadsheet_id = str(spreadsheet_id).strip()
         self.spreadsheet = self.client.open_by_key(spreadsheet_id)
         self._worksheets: dict[str, Any] = {}
+        self._worksheet_index_loaded = False
+        self._headers_checked: set[str] = set()
         self._lock = threading.RLock()
 
     def _worksheet(self, sheet_name: str):
         with self._lock:
+            if not self._worksheet_index_loaded:
+                self._worksheets.update(
+                    {worksheet.title: worksheet for worksheet in self.spreadsheet.worksheets()}
+                )
+                self._worksheet_index_loaded = True
             if sheet_name in self._worksheets:
                 return self._worksheets[sheet_name]
-            try:
-                worksheet = self.spreadsheet.worksheet(sheet_name)
-            except gspread.WorksheetNotFound:
-                worksheet = self.spreadsheet.add_worksheet(
-                    title=sheet_name,
-                    rows=1000,
-                    cols=max(10, len(SHEET_SCHEMAS[sheet_name])),
-                )
-            self._ensure_header(worksheet, sheet_name)
+            worksheet = self.spreadsheet.add_worksheet(
+                title=sheet_name,
+                rows=1000,
+                cols=max(10, len(SHEET_SCHEMAS[sheet_name])),
+            )
             self._worksheets[sheet_name] = worksheet
             return worksheet
 
-    def _ensure_header(self, worksheet, sheet_name: str) -> None:
+    def _ensure_header(
+        self, worksheet, sheet_name: str, values: list[list[object]]
+    ) -> list[list[object]]:
         expected = SHEET_SCHEMAS[sheet_name]
-        values = worksheet.get_all_values()
         if not values:
             worksheet.update(range_name="A1", values=[expected])
-            return
+            return [expected]
         current = [str(value).strip() for value in values[0]]
         if current == expected:
-            return
+            return values
         # Preserve rows by field name while migrating a managed tab's schema.
         records = [
             dict(zip(current, row + [""] * max(0, len(current) - len(row)), strict=False))
@@ -81,10 +91,15 @@ class GoogleSheetMirror:
         ]
         worksheet.clear()
         worksheet.update(range_name="A1", values=remapped)
+        return remapped
 
     def rows(self, sheet_name: str) -> list[dict[str, object]]:
-        worksheet = self._worksheet(sheet_name)
-        values = worksheet.get_all_values()
+        with self._lock:
+            worksheet = self._worksheet(sheet_name)
+            values = self._ensure_header(
+                worksheet, sheet_name, worksheet.get_all_values()
+            )
+            self._headers_checked.add(sheet_name)
         if len(values) < 2:
             return []
         headers = SHEET_SCHEMAS[sheet_name]
@@ -101,7 +116,14 @@ class GoogleSheetMirror:
             worksheet = self._worksheet(sheet_name)
             columns = SHEET_SCHEMAS[sheet_name]
             key = columns[0]
-            existing_ids = worksheet.col_values(1)
+            if sheet_name in self._headers_checked:
+                existing_ids = worksheet.col_values(1)
+            else:
+                values = self._ensure_header(
+                    worksheet, sheet_name, worksheet.get_all_values()
+                )
+                self._headers_checked.add(sheet_name)
+                existing_ids = [row[0] if row else "" for row in values]
             row_numbers = {
                 str(value): index
                 for index, value in enumerate(existing_ids[1:], start=2)
@@ -135,6 +157,10 @@ class GoogleSheetMirror:
         if match is not None and match.row > 1:
             worksheet.delete_rows(match.row)
 
+    def health_check(self) -> None:
+        """Make one lightweight authenticated read without rewriting user records."""
+        self._worksheet("Users").get("A1:A1")
+
     def bootstrap(
         self, local: LocalStore, *, remote_is_authoritative: bool = False
     ) -> None:
@@ -146,7 +172,10 @@ class GoogleSheetMirror:
             if remote_is_authoritative:
                 local.replace_sheet_rows(sheet_name, remote_rows)
             elif remote_rows:
-                local.merge_sheet_rows(sheet_name, remote_rows)
+                if sheet_name in ENVIRONMENT_CONFIGURATION_SHEETS:
+                    local.replace_sheet_rows(sheet_name, remote_rows)
+                else:
+                    local.merge_sheet_rows(sheet_name, remote_rows)
             else:
                 self.upsert_rows(sheet_name, local.sheet_rows(sheet_name))
 
@@ -163,13 +192,18 @@ class HybridStore:
     ) -> None:
         self.local = local
         self.mirror = mirror
+        self.connected_spreadsheet_id = str(getattr(mirror, "spreadsheet_id", ""))
+        self.environment = str(environment).strip().lower()
+        self.remote_is_authoritative = str(environment).strip().lower() == "production"
+        self.bootstrap_incomplete = True
         self.sync_error = ""
         self._pending_sync: dict[str, set[str]] = {}
         try:
             self.mirror.bootstrap(
                 self.local,
-                remote_is_authoritative=str(environment).strip().lower() == "production",
+                remote_is_authoritative=self.remote_is_authoritative,
             )
+            self.bootstrap_incomplete = False
             changed_log_ids = self.local.refresh_logs_from_station_overrides()
             if changed_log_ids:
                 self._sync(
@@ -215,11 +249,18 @@ class HybridStore:
             self.sync_error = f"{type(error).__name__}: {error}"
 
     def retry_sync(self) -> tuple[bool, str]:
-        """Retry only records retained after failed writes, plus a small health check."""
+        """Resume an interrupted bootstrap, then retry records retained after writes."""
         try:
-            if not self._pending_sync:
-                self.mirror.upsert_rows("Users", self.local.sheet_rows("Users"))
-            else:
+            resumed_bootstrap = False
+            if self.bootstrap_incomplete:
+                self.mirror.bootstrap(
+                    self.local,
+                    remote_is_authoritative=self.remote_is_authoritative,
+                )
+                self.bootstrap_incomplete = False
+                resumed_bootstrap = True
+                self.local.refresh_logs_from_station_overrides()
+            if self._pending_sync:
                 for sheet_name, row_ids in list(self._pending_sync.items()):
                     rows = [
                         row
@@ -228,6 +269,8 @@ class HybridStore:
                     ]
                     self.mirror.upsert_rows(sheet_name, rows)
                 self._pending_sync.clear()
+            elif not resumed_bootstrap:
+                self.mirror.health_check()
             self.sync_error = ""
             return True, "Google Sheet sync is durable again."
         except Exception as error:
@@ -241,8 +284,14 @@ class HybridStore:
             self._sync(sheet_name, [row])
 
     def upsert_user(self, user_id: str, email: str, display_name: str) -> None:
+        before = self.local.user_profile(user_id)
         self.local.upsert_user(user_id, email, display_name)
-        self._sync_one("Users", user_id)
+        after = self.local.user_profile(user_id)
+        if before is None or any(
+            str(before.get(field, "")) != str(after.get(field, ""))
+            for field in ("email", "display_name")
+        ):
+            self._sync_one("Users", user_id)
 
     def update_user_preferences(self, user_id: str, **values: object) -> None:
         self.local.update_user_preferences(user_id, **values)

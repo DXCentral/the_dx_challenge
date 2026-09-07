@@ -9,9 +9,10 @@ CONTENT_DIR = APP_ROOT / "content"
 LOCAL_DATA_DIR = APP_ROOT / ".local"
 LOCAL_DB_PATH = LOCAL_DATA_DIR / "dx_challenge_staging_v1.sqlite3"
 APP_LOGO_FILE = ASSET_DIR / "dx_challenge_logo.png"
-APP_VERSION = "1.0.0-rc10.2"
+APP_VERSION = "1.0.0-rc10.4"
 
 STAGING_SPREADSHEET_ID = "1Z0C_bnxCgVMWdhP26MbvKqsGCNcCab0zeSQiIpJzn2A"
+PRODUCTION_SPREADSHEET_ID = "1EMPxrbrNZlrq2BzbqdBNeW8ZFVTR325Q_hztMJ7hAO8"
 DEFAULT_USER_ID = "local-tester@dxcentralonline.com"
 DEFAULT_USER_NAME = "Local tester"
 
