@@ -14,7 +14,7 @@ from app_support import (
     season_eligible_logs,
 )
 from dxcore.awards import award_milestones
-from dxcore.config import APP_VERSION, CONTENT_DIR
+from dxcore.config import APP_VERSION, CONTENT_DIR, USER_GUIDE_URL
 from dxcore.shoutouts import CATEGORY_PRESENTATION, media_filename, observed_categories
 
 
@@ -62,6 +62,23 @@ st.caption("Celebrate standout catches and DX milestones without exposing privat
 with st.container(horizontal=True, vertical_alignment="center"):
     st.badge(f"Version {APP_VERSION}", icon=":material/new_releases:", color="blue")
     st.caption(f"Season 7 {app_environment().title()} build")
+
+with st.container(border=True):
+    st.subheader("User guide")
+    st.write(
+        "New to The DX Challenge, or looking for a feature? The complete illustrated "
+        "guide covers setup, logging, bulk imports, log editing and deletion, maps, "
+        "challenge analysis, and profile customization."
+    )
+    st.link_button(
+        "Open or download the user guide (PDF)",
+        USER_GUIDE_URL,
+        type="primary",
+        icon=":material/download:",
+        help="Opens the permanent Version 1.0 PDF in a new browser tab.",
+        width="content",
+    )
+    st.caption("User Guide Version 1.0 · PDF")
 
 with st.container(border=True):
     st.subheader("DXer shoutouts")
