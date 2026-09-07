@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.1 · Station correction and map hotfix
+
+- Made administrator station-database corrections cascade into existing reception records, including corrected coordinates, grid, station details, and recalculated QTH distance; the repaired records are mirrored back to Google Sheets.
+- Added an automatic startup reconciliation so overrides saved before this hotfix repair their associated logs on the first deployment launch.
+- Normalized mixed Google Sheet coordinate values before rendering Station locations and Paths, preventing the all-band float/string map crash in both Stats and challenge analysis.
+
 ### Version 1.0.0-rc10 · Final beta safeguards and preferences
 
 - Enforced one authoritative reception boundary at final save: every entry must qualify for an enabled Season 7 marathon, future timestamps are rejected, and qualifying weekly sprints are classified independently using their full rules.
