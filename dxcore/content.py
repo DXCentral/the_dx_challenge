@@ -264,6 +264,51 @@ def logs_qualifying_for_challenges(
     return logs[eligible].copy()
 
 
+def validate_season_submission(
+    log: pd.Series | dict[str, object],
+    challenges: list[dict[str, object]],
+    now: datetime | None = None,
+) -> tuple[bool, str, list[str]]:
+    """Validate one submitted reception and identify any sprint memberships.
+
+    A reception is accepted only when it is not in the future and qualifies for at
+    least one enabled marathon. Sprint membership is an additional classification,
+    never a replacement for the season-long acceptance boundary.
+    """
+    instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    value = dict(log)
+    parsed = pd.to_datetime(value.get("reception_utc"), utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return False, "Reception date and time are invalid.", []
+    reception = parsed.to_pydatetime()
+    if reception > instant:
+        return False, "Reception date and time cannot be in the future.", []
+
+    marathons = [item for item in challenges if item.get("type") == "marathon"]
+    if not marathons:
+        return (
+            False,
+            "No enabled Season 7 marathon is configured, so reception entry is currently closed.",
+            [],
+        )
+    qualifying_marathons = [
+        item for item in marathons if log_qualifies(value, item)
+    ]
+    if not qualifying_marathons:
+        band = _text(value.get("band")).upper() or "selected"
+        return (
+            False,
+            f"This {band} reception is outside the enabled Season 7 marathon criteria and was not saved.",
+            [],
+        )
+    sprint_names = [
+        str(item["name"])
+        for item in challenges
+        if item.get("type") == "sprint" and log_qualifies(value, item)
+    ]
+    return True, "Reception is eligible for Season 7.", sprint_names
+
+
 def load_announcements(now: datetime | None = None) -> pd.DataFrame:
     frame = pd.read_csv(ANNOUNCEMENT_FILE, dtype=str).fillna("")
     if "body" not in frame and "message" in frame:

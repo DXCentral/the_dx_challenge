@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
+from dxcore.content import validate_season_submission
 from dxcore.geo import haversine_miles
 from dxcore.propagation import normalize_mw_propagation
 from dxcore.solar import mw_propagation
@@ -712,6 +713,8 @@ def normalize_import(
     location: dict[str, object],
     stations: pd.DataFrame,
     existing_logs: pd.DataFrame,
+    challenges: list[dict[str, object]] | None = None,
+    instant: datetime | None = None,
 ) -> pd.DataFrame:
     results: list[dict[str, object]] = []
     identity_index: dict[tuple[str, float, str], list[dict[str, object]]] = {}
@@ -736,6 +739,7 @@ def normalize_import(
     effective_date_order = "DMY" if source_format in {"FMList", "MWList"} else date_order
     effective_time_protocol = "UTC" if source_format in {"FMList", "MWList"} else time_protocol
     source_label = f"import_{source_format.casefold().replace(' ', '_')}"
+    validation_now = instant or datetime.now(timezone.utc)
 
     for source_row, (_, row) in enumerate(frame.iterrows(), 1):
         base: dict[str, object] = {
@@ -755,6 +759,20 @@ def normalize_import(
                 time_protocol=effective_time_protocol,
                 timezone_name=timezone_name,
             )
+            if reception > validation_now:
+                raise ValueError("Reception date and time cannot be in the future.")
+            if challenges is not None:
+                marathon_windows = [
+                    challenge
+                    for challenge in challenges
+                    if challenge.get("type") == "marathon"
+                    and band in challenge.get("bands", [])
+                    and challenge["start_utc"] <= reception <= challenge["end_utc"]
+                ]
+                if not marathon_windows:
+                    raise ValueError(
+                        f"This {band} reception is outside the enabled Season 7 marathon dates."
+                    )
             source_call = _value(row, mapping, "call")
             if not str(source_call).strip():
                 raise ValueError("Station/call field is blank.")
@@ -885,6 +903,19 @@ def normalize_import(
                     "station_review_status": "",
                 }
             )
+            if challenges is not None and status == "Ready":
+                in_scope, scope_message, _ = validate_season_submission(
+                    base, challenges, validation_now
+                )
+                if not in_scope:
+                    base["selected"] = False
+                    base["status"] = "Invalid"
+                    base["message"] = scope_message
+                    batch_times[station_id] = [
+                        value
+                        for value in batch_times.get(station_id, [])
+                        if value != reception
+                    ]
         except (TypeError, ValueError, OverflowError) as error:
             base["message"] = str(error)
         results.append(base)

@@ -372,9 +372,53 @@ class HybridStore:
             self._sync("Logging Entries", related.to_dict("records"))
         return promoted, message, station_id
 
+    def upsert_station_override(self, values: dict[str, object]) -> tuple[bool, str, str]:
+        updated, message, station_id = self.local.upsert_station_override(values)
+        if updated:
+            self._sync_one("Station Overrides", station_id)
+        return updated, message, station_id
+
+    def delete_station_override(self, station_id: str) -> tuple[bool, str]:
+        deleted, message = self.local.delete_station_override(station_id)
+        if deleted:
+            try:
+                self.mirror.delete_row("Station Overrides", station_id)
+                self.sync_error = ""
+            except Exception as error:
+                LOGGER.exception("Google Sheet station override delete failed")
+                self.sync_error = f"{type(error).__name__}: {error}"
+        return deleted, message
+
     def record_import_batch(self, **values: object) -> None:
         self.local.record_import_batch(**values)
         self._sync_one("Import Batches", str(values["batch_id"]))
+
+    def save_import_review_rows(
+        self, batch_id: str, review: pd.DataFrame, statuses: set[str] | None = None
+    ) -> list[str]:
+        review_ids = self.local.save_import_review_rows(batch_id, review, statuses)
+        self._sync(
+            "Import Review",
+            [
+                record
+                for review_id in review_ids
+                if (record := self.local.sheet_row("Import Review", review_id)) is not None
+            ],
+        )
+        return review_ids
+
+    def update_import_review_status(self, review_ids: list[str], status: str) -> int:
+        updated = self.local.update_import_review_status(review_ids, status)
+        if updated:
+            self._sync(
+                "Import Review",
+                [
+                    record
+                    for review_id in review_ids
+                    if (record := self.local.sheet_row("Import Review", review_id)) is not None
+                ],
+            )
+        return updated
 
     def upsert_announcement(self, values: dict[str, object]) -> str:
         announcement_id = self.local.upsert_announcement(values)

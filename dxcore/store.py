@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ from typing import Iterator
 import pandas as pd
 
 from dxcore.config import CONTENT_DIR, LOCAL_DB_PATH
+from dxcore.content import challenges_from_frame, validate_season_submission
 from dxcore.geo import haversine_miles, latlon_to_grid, valid_coordinates, valid_grid
 from dxcore.schema import SHEET_SCHEMAS
 
@@ -21,6 +23,7 @@ SHEET_TABLES = {
     "Logging Entries": "logs",
     "Bandscan": "bandscan",
     "Import Batches": "import_batches",
+    "Import Review": "import_review",
     "Station Overrides": "station_overrides",
     "Announcements": "announcements",
     "Challenges": "challenges",
@@ -70,7 +73,11 @@ class LocalStore:
                     theme_name TEXT NOT NULL DEFAULT 'Midnight blue',
                     large_text INTEGER NOT NULL DEFAULT 0,
                     reduce_motion INTEGER NOT NULL DEFAULT 0,
-                    walkthrough_complete INTEGER NOT NULL DEFAULT 0
+                    walkthrough_complete INTEGER NOT NULL DEFAULT 0,
+                    timezone_name TEXT NOT NULL DEFAULT 'UTC',
+                    time_display TEXT NOT NULL DEFAULT 'UTC',
+                    clock_format TEXT NOT NULL DEFAULT '24-hour',
+                    distance_unit TEXT NOT NULL DEFAULT 'Miles'
                 );
                 CREATE TABLE IF NOT EXISTS locations (
                     location_id TEXT PRIMARY KEY,
@@ -188,6 +195,17 @@ class LocalStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_import_batches_user
                     ON import_batches(user_id, created_utc);
+                CREATE TABLE IF NOT EXISTS import_review (
+                    review_id TEXT PRIMARY KEY,
+                    batch_id TEXT NOT NULL,
+                    source_row INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    original_json TEXT NOT NULL,
+                    normalized_json TEXT NOT NULL,
+                    message TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_import_review_batch
+                    ON import_review(batch_id, status, source_row);
                 CREATE TABLE IF NOT EXISTS station_overrides (
                     station_id TEXT PRIMARY KEY,
                     band TEXT NOT NULL,
@@ -220,6 +238,10 @@ class LocalStore:
                 "large_text": "INTEGER NOT NULL DEFAULT 0",
                 "reduce_motion": "INTEGER NOT NULL DEFAULT 0",
                 "walkthrough_complete": "INTEGER NOT NULL DEFAULT 0",
+                "timezone_name": "TEXT NOT NULL DEFAULT 'UTC'",
+                "time_display": "TEXT NOT NULL DEFAULT 'UTC'",
+                "clock_format": "TEXT NOT NULL DEFAULT '24-hour'",
+                "distance_unit": "TEXT NOT NULL DEFAULT 'Miles'",
             }.items():
                 if column not in existing_user_columns:
                     connection.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
@@ -399,6 +421,10 @@ class LocalStore:
         large_text: bool | None = None,
         reduce_motion: bool | None = None,
         walkthrough_complete: bool | None = None,
+        timezone_name: str | None = None,
+        time_display: str | None = None,
+        clock_format: str | None = None,
+        distance_unit: str | None = None,
     ) -> None:
         values: dict[str, object] = {}
         if display_name is not None:
@@ -414,6 +440,26 @@ class LocalStore:
             values["reduce_motion"] = int(reduce_motion)
         if walkthrough_complete is not None:
             values["walkthrough_complete"] = int(walkthrough_complete)
+        if timezone_name is not None:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+            try:
+                ZoneInfo(timezone_name)
+            except ZoneInfoNotFoundError as error:
+                raise ValueError("Choose a valid IANA time zone.") from error
+            values["timezone_name"] = timezone_name
+        if time_display is not None:
+            if time_display not in {"UTC", "Local time"}:
+                raise ValueError("Choose UTC or Local time display.")
+            values["time_display"] = time_display
+        if clock_format is not None:
+            if clock_format not in {"24-hour", "12-hour"}:
+                raise ValueError("Choose a 24-hour or 12-hour clock.")
+            values["clock_format"] = clock_format
+        if distance_unit is not None:
+            if distance_unit not in {"Miles", "Kilometers"}:
+                raise ValueError("Choose miles or kilometers.")
+            values["distance_unit"] = distance_unit
         if not values:
             return
         values["updated_utc"] = iso_utc()
@@ -666,6 +712,16 @@ class LocalStore:
         reception = datetime.fromisoformat(str(values["reception_utc"]).replace("Z", "+00:00"))
         if reception.tzinfo is None:
             reception = reception.replace(tzinfo=timezone.utc)
+        challenge_frame = pd.read_sql_query(
+            "SELECT * FROM challenges", connection
+        )
+        accepted_for_season, scope_message, _ = validate_season_submission(
+            {**values, "reception_utc": reception.isoformat()},
+            challenges_from_frame(challenge_frame),
+            utc_now(),
+        )
+        if not accepted_for_season:
+            return False, scope_message
         lower = iso_utc(reception - timedelta(minutes=5))
         upper = iso_utc(reception + timedelta(minutes=5))
         duplicate = connection.execute(
@@ -772,6 +828,93 @@ class LocalStore:
                 ),
             )
 
+    @staticmethod
+    def _review_json(record: dict[str, object]) -> str:
+        return json.dumps(record, default=str, ensure_ascii=False, separators=(",", ":"))
+
+    def save_import_review_rows(
+        self, batch_id: str, review: pd.DataFrame, statuses: set[str] | None = None
+    ) -> list[str]:
+        """Persist reviewable importer rows so they survive reruns and later sessions."""
+        if review.empty:
+            return []
+        wanted = statuses or {"Needs review", "Ready"}
+        rows = review[review["status"].astype(str).isin(wanted)]
+        if "review_id" in rows.columns and rows["review_id"].astype(str).str.strip().any():
+            rows = rows[rows["review_id"].astype(str).str.strip() != ""]
+        saved: list[str] = []
+        source_fields = [
+            "source_row", "source_station", "source_city", "source_region",
+            "source_country", "source_county", "source_grid", "frequency",
+            "band", "reception_utc",
+        ]
+        with self.connect() as connection:
+            for record in rows.to_dict("records"):
+                source_row = int(record.get("source_row", 0))
+                review_id = str(record.get("review_id", "")).strip() or (
+                    f"review_{hashlib.sha1(f'{batch_id}|{source_row}'.encode()).hexdigest()[:20]}"
+                )
+                normalized = dict(record)
+                normalized["review_id"] = review_id
+                original = {field: record.get(field, "") for field in source_fields}
+                connection.execute(
+                    """
+                    INSERT INTO import_review(
+                        review_id,batch_id,source_row,status,original_json,
+                        normalized_json,message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(review_id) DO UPDATE SET
+                        status=excluded.status,
+                        normalized_json=excluded.normalized_json,
+                        message=excluded.message
+                    """,
+                    (
+                        review_id,
+                        batch_id,
+                        source_row,
+                        str(record.get("status", "Needs review")),
+                        self._review_json(original),
+                        self._review_json(normalized),
+                        str(record.get("message", "")),
+                    ),
+                )
+                saved.append(review_id)
+        return saved
+
+    def import_review_rows(
+        self, user_id: str, statuses: tuple[str, ...] = ("Needs review", "Ready")
+    ) -> pd.DataFrame:
+        if not statuses:
+            return pd.DataFrame(columns=[*SHEET_SCHEMAS["Import Review"], "filename"])
+        placeholders = ",".join("?" for _ in statuses)
+        with self.connect() as connection:
+            frame = pd.read_sql_query(
+                f"""
+                SELECT r.*, b.user_id, b.filename, b.source_format, b.created_utc
+                FROM import_review r
+                JOIN import_batches b ON b.batch_id=r.batch_id
+                WHERE b.user_id=? AND r.status IN ({placeholders})
+                ORDER BY b.created_utc DESC, r.source_row
+                """,
+                connection,
+                params=(user_id, *statuses),
+            )
+        return frame
+
+    def update_import_review_status(
+        self, review_ids: list[str], status: str
+    ) -> int:
+        allowed = {"Needs review", "Ready", "Imported", "Dismissed"}
+        if status not in allowed or not review_ids:
+            return 0
+        placeholders = ",".join("?" for _ in review_ids)
+        with self.connect() as connection:
+            result = connection.execute(
+                f"UPDATE import_review SET status=? WHERE review_id IN ({placeholders})",
+                (status, *review_ids),
+            )
+        return int(result.rowcount)
+
     def update_log(self, user_id: str, log_id: str, values: dict[str, object]) -> tuple[bool, str]:
         allowed = {
             "reception_utc", "propagation", "is_sdr", "is_portable", "notes",
@@ -792,6 +935,17 @@ class LocalStore:
             if reception.tzinfo is None:
                 reception = reception.replace(tzinfo=timezone.utc)
             reception_iso = iso_utc(reception)
+            if "reception_utc" in updates:
+                challenge_frame = pd.read_sql_query(
+                    "SELECT * FROM challenges", connection
+                )
+                accepted_for_season, scope_message, _ = validate_season_submission(
+                    {**dict(existing), **updates, "reception_utc": reception_iso},
+                    challenges_from_frame(challenge_frame),
+                    utc_now(),
+                )
+                if not accepted_for_season:
+                    return False, scope_message
             duplicate = connection.execute(
                 """
                 SELECT log_id, reception_utc FROM logs
@@ -853,6 +1007,14 @@ class LocalStore:
             if reception.tzinfo is None:
                 reception = reception.replace(tzinfo=timezone.utc)
             reception_iso = iso_utc(reception)
+            challenge_frame = pd.read_sql_query("SELECT * FROM challenges", connection)
+            in_scope, scope_message, _ = validate_season_submission(
+                {**merged, "reception_utc": reception_iso},
+                challenges_from_frame(challenge_frame),
+                utc_now(),
+            )
+            if not in_scope:
+                return False, scope_message
             duplicate = connection.execute(
                 """
                 SELECT log_id, reception_utc FROM logs
@@ -967,6 +1129,76 @@ class LocalStore:
                 "SELECT * FROM station_overrides ORDER BY band, frequency, call",
                 connection,
             )
+
+    def upsert_station_override(self, values: dict[str, object]) -> tuple[bool, str, str]:
+        station_id = str(values.get("station_id", "")).strip()
+        required = [
+            station_id,
+            str(values.get("band", "")).strip(),
+            str(values.get("call", "")).strip(),
+            str(values.get("city", "")).strip(),
+            str(values.get("country", "")).strip(),
+        ]
+        if any(not value for value in required):
+            return False, "Station ID, band, call/name, city, and country are required.", ""
+        try:
+            frequency = float(values.get("frequency", ""))
+            latitude = float(values.get("latitude", ""))
+            longitude = float(values.get("longitude", ""))
+        except (TypeError, ValueError):
+            return False, "Frequency, latitude, and longitude must be valid numbers.", ""
+        if not valid_coordinates(latitude, longitude):
+            return False, "Latitude or longitude is outside its valid range.", ""
+        grid = str(values.get("grid", "")).strip().upper()
+        if not valid_grid(grid):
+            grid = latlon_to_grid(latitude, longitude)
+        now = iso_utc()
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT approved_utc, source_log_id FROM station_overrides WHERE station_id=?",
+                (station_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO station_overrides(
+                    station_id,band,frequency,call,city,region,country,county,grid,
+                    latitude,longitude,source_log_id,approved_utc,updated_utc
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(station_id) DO UPDATE SET
+                    band=excluded.band, frequency=excluded.frequency, call=excluded.call,
+                    city=excluded.city, region=excluded.region, country=excluded.country,
+                    county=excluded.county, grid=excluded.grid, latitude=excluded.latitude,
+                    longitude=excluded.longitude, updated_utc=excluded.updated_utc
+                """,
+                (
+                    station_id,
+                    str(values["band"]).upper(),
+                    frequency,
+                    str(values["call"]).strip(),
+                    str(values["city"]).strip(),
+                    str(values.get("region", "")).strip(),
+                    str(values["country"]).strip(),
+                    str(values.get("county", "")).strip(),
+                    grid,
+                    latitude,
+                    longitude,
+                    str(values.get("source_log_id", "")).strip()
+                    or (str(existing["source_log_id"]) if existing else "admin"),
+                    str(existing["approved_utc"]) if existing else now,
+                    now,
+                ),
+            )
+        return True, "Station database override saved.", station_id
+
+    def delete_station_override(self, station_id: str) -> tuple[bool, str]:
+        with self.connect() as connection:
+            result = connection.execute(
+                "DELETE FROM station_overrides WHERE station_id=?", (station_id,)
+            )
+        return (True, "Station override removed; the original source-list record is active again.") if result.rowcount == 1 else (
+            False,
+            "Station override was not found.",
+        )
 
     def promote_station_override(
         self, log_id: str

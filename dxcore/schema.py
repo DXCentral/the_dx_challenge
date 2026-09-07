@@ -5,6 +5,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
     "Users": [
         "user_id", "email", "display_name", "created_utc", "updated_utc",
         "theme_name", "large_text", "reduce_motion", "walkthrough_complete",
+        "timezone_name", "time_display", "clock_format", "distance_unit",
     ],
     "Locations": [
         "location_id",
