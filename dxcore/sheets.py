@@ -157,6 +157,16 @@ class HybridStore:
         self._pending_sync: dict[str, set[str]] = {}
         try:
             self.mirror.bootstrap(self.local)
+            changed_log_ids = self.local.refresh_logs_from_station_overrides()
+            if changed_log_ids:
+                self._sync(
+                    "Logging Entries",
+                    [
+                        record
+                        for log_id in changed_log_ids
+                        if (record := self.local.sheet_row("Logging Entries", log_id)) is not None
+                    ],
+                )
         except Exception as error:  # The UI reports degraded persistence.
             LOGGER.exception("Google Sheet bootstrap failed")
             self.sync_error = f"{type(error).__name__}: {error}"
@@ -376,6 +386,9 @@ class HybridStore:
         updated, message, station_id = self.local.upsert_station_override(values)
         if updated:
             self._sync_one("Station Overrides", station_id)
+            related = self.local.logs()
+            related = related[related["station_id"].astype(str) == station_id]
+            self._sync("Logging Entries", related.to_dict("records"))
         return updated, message, station_id
 
     def delete_station_override(self, station_id: str) -> tuple[bool, str]:

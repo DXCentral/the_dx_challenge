@@ -295,6 +295,8 @@ class LocalStore:
                     [(canonical_counties.get(station_id, ""), station_id) for station_id in legacy_nwr_ids],
                 )
             self._seed_content(connection)
+            for override in connection.execute("SELECT * FROM station_overrides").fetchall():
+                self._apply_station_values_to_logs(connection, dict(override))
 
     def _seed_content(self, connection: sqlite3.Connection) -> None:
         now = iso_utc()
@@ -1130,6 +1132,86 @@ class LocalStore:
                 connection,
             )
 
+    @staticmethod
+    def _station_value_changed(old: object, new: object, numeric: bool = False) -> bool:
+        if numeric:
+            old_number = pd.to_numeric(old, errors="coerce")
+            new_number = pd.to_numeric(new, errors="coerce")
+            if pd.isna(old_number) and pd.isna(new_number):
+                return False
+            if pd.isna(old_number) or pd.isna(new_number):
+                return True
+            return abs(float(old_number) - float(new_number)) > 0.000001
+        return str(old or "").strip() != str(new or "").strip()
+
+    def _apply_station_values_to_logs(
+        self, connection: sqlite3.Connection, values: dict[str, object]
+    ) -> list[str]:
+        """Cascade a canonical station correction into denormalized log snapshots."""
+        station_id = str(values.get("station_id", "")).strip()
+        if not station_id:
+            return []
+        rows = connection.execute(
+            """
+            SELECT l.*, q.latitude AS qth_latitude, q.longitude AS qth_longitude
+            FROM logs l
+            LEFT JOIN locations q ON q.location_id=l.location_id
+            WHERE l.station_id=? AND l.deleted_utc=''
+            """,
+            (station_id,),
+        ).fetchall()
+        changed_ids: list[str] = []
+        latitude = float(values["latitude"])
+        longitude = float(values["longitude"])
+        for row in rows:
+            distance: float | str = row["distance_miles"]
+            if valid_coordinates(row["qth_latitude"], row["qth_longitude"]):
+                distance = round(
+                    haversine_miles(
+                        float(row["qth_latitude"]), float(row["qth_longitude"]),
+                        latitude, longitude,
+                    ),
+                    1,
+                )
+            updates = {
+                "band": str(values["band"]).upper(),
+                "frequency": float(values["frequency"]),
+                "call": str(values["call"]).strip(),
+                "station_city": str(values["city"]).strip(),
+                "station_region": str(values.get("region", "")).strip(),
+                "station_country": str(values["country"]).strip(),
+                "station_county": str(values.get("county", "")).strip(),
+                "station_grid": str(values.get("grid", "")).strip().upper(),
+                "station_latitude": latitude,
+                "station_longitude": longitude,
+                "distance_miles": distance,
+            }
+            numeric_fields = {
+                "frequency", "station_latitude", "station_longitude", "distance_miles"
+            }
+            if not any(
+                self._station_value_changed(row[field], value, field in numeric_fields)
+                for field, value in updates.items()
+            ):
+                continue
+            assignments = ", ".join(f"{field}=?" for field in updates)
+            connection.execute(
+                f"UPDATE logs SET {assignments}, updated_utc=?, revision=revision+1 WHERE log_id=?",
+                (*updates.values(), iso_utc(), row["log_id"]),
+            )
+            changed_ids.append(str(row["log_id"]))
+        return changed_ids
+
+    def refresh_logs_from_station_overrides(self) -> list[str]:
+        """Apply durable station overrides after a Sheet/cache bootstrap."""
+        changed_ids: list[str] = []
+        with self.connect() as connection:
+            for override in connection.execute("SELECT * FROM station_overrides").fetchall():
+                changed_ids.extend(
+                    self._apply_station_values_to_logs(connection, dict(override))
+                )
+        return changed_ids
+
     def upsert_station_override(self, values: dict[str, object]) -> tuple[bool, str, str]:
         station_id = str(values.get("station_id", "")).strip()
         required = [
@@ -1188,7 +1270,23 @@ class LocalStore:
                     now,
                 ),
             )
-        return True, "Station database override saved.", station_id
+            changed_logs = self._apply_station_values_to_logs(
+                connection,
+                {
+                    **values,
+                    "station_id": station_id,
+                    "frequency": frequency,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "grid": grid,
+                },
+            )
+        suffix = (
+            f" Updated {len(changed_logs):,} existing reception record(s)."
+            if changed_logs
+            else ""
+        )
+        return True, f"Station database override saved.{suffix}", station_id
 
     def delete_station_override(self, station_id: str) -> tuple[bool, str]:
         with self.connect() as connection:

@@ -31,6 +31,19 @@ def add_geography_keys(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def valid_station_coordinates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize Sheet-sourced coordinates and remove invalid map points."""
+    result = frame.copy()
+    for column in ("station_latitude", "station_longitude"):
+        if column not in result:
+            result[column] = pd.Series(index=result.index, dtype=float)
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    return result[
+        result["station_latitude"].between(-90, 90)
+        & result["station_longitude"].between(-180, 180)
+    ].copy()
+
+
 def canonical_daypart(value: object) -> str:
     text = "" if pd.isna(value) else str(value).strip()
     lowered = text.casefold()
