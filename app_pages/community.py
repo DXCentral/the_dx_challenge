@@ -14,8 +14,15 @@ from app_support import (
     season_eligible_logs,
 )
 from dxcore.awards import award_milestones
-from dxcore.config import APP_VERSION, CONTENT_DIR, USER_GUIDE_URL
+from dxcore.config import APP_VERSION, CONTENT_DIR
 from dxcore.shoutouts import CATEGORY_PRESENTATION, media_filename, observed_categories
+
+
+USER_GUIDE_URL = (
+    "https://raw.githubusercontent.com/DXCentral/the_dx_challenge/"
+    "a1cf205714a2d03c6aa0c10cdcf56960a1385002/"
+    "The_DX_Challenge_User_Guide_v1.0%20Complete.pdf"
+)
 
 
 def read_content(name: str, fallback: str) -> str:
