@@ -3,8 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app_support import get_store, require_location
+from app_support import get_store, require_location, season_eligible_logs
 from dxcore.bandscan import reception_history
+from dxcore.presentation import distance_is_km, format_reception
 from dxcore.stations import frequencies_for_band
 
 
@@ -13,12 +14,20 @@ COLORS = {
     "regional": "#F28C28",
     "open": "#39C986",
 }
-DISTANCE_FILTERS = {
-    "All": None,
-    "Red · within 50 mi": "local",
-    "Orange · 50–200 mi": "regional",
-    "Green · beyond 200 mi": "open",
-}
+def distance_filters(preferences: dict[str, object]) -> dict[str, str | None]:
+    if distance_is_km(preferences):
+        return {
+            "All": None,
+            "Red · within 80 km": "local",
+            "Orange · 80–322 km": "regional",
+            "Green · beyond 322 km": "open",
+        }
+    return {
+        "All": None,
+        "Red · within 50 mi": "local",
+        "Orange · 50–200 mi": "regional",
+        "Green · beyond 200 mi": "open",
+    }
 
 
 def clear_distance_filter(key: str) -> None:
@@ -38,7 +47,9 @@ st.caption(
 
 location = require_location()
 user_id = st.session_state.user["user_id"]
-logs = get_store().logs(user_id)
+logs = season_eligible_logs(get_store().logs(user_id))
+preferences = st.session_state.user
+distance_filter_options = distance_filters(preferences)
 
 band = st.segmented_control(
     "Band",
@@ -78,18 +89,27 @@ with st.container(horizontal=True):
     st.metric("Unique stations", f"{unique_stations:,}", border=True)
     st.metric("Submitted receptions", f"{len(band_rows):,}", border=True)
 
-st.caption(
-    ":red-badge[Red · station within 50 mi] "
-    ":orange-badge[Orange · station within 200 mi] "
-    ":green-badge[Green · only stations beyond 200 mi]"
-)
+if distance_is_km(preferences):
+    st.caption(
+        ":red-badge[Red · station within 80 km] "
+        ":orange-badge[Orange · station within 322 km] "
+        ":green-badge[Green · only stations beyond 322 km]"
+    )
+else:
+    st.caption(
+        ":red-badge[Red · station within 50 mi] "
+        ":orange-badge[Orange · station within 200 mi] "
+        ":green-badge[Green · only stations beyond 200 mi]"
+    )
 
 filter_key = f"scan_distance_filter_{band}"
 st.session_state.setdefault(filter_key, "All")
+if st.session_state[filter_key] not in distance_filter_options:
+    st.session_state[filter_key] = "All"
 with st.container(horizontal=True, vertical_alignment="bottom"):
     distance_filter = st.segmented_control(
         "Filter frequency grid by distance category",
-        list(DISTANCE_FILTERS),
+        list(distance_filter_options),
         key=filter_key,
         persist_state="session",
     )
@@ -104,7 +124,7 @@ with st.container(horizontal=True, vertical_alignment="bottom"):
 
 style_rules: list[str] = []
 frequency_keys = {round(value, 3) for value in frequencies}
-selected_level = DISTANCE_FILTERS.get(distance_filter)
+selected_level = distance_filter_options.get(distance_filter)
 for frequency in frequency_keys:
     summary = history.get(frequency)
     token = str(frequency).replace(".", "_")
@@ -181,10 +201,9 @@ with st.sidebar:
                     for (_, reception_row), instant in zip(
                         station_rows.iterrows(), receptions, strict=False
                     ):
-                        when = (
-                            instant.strftime("%Y-%m-%d %H:%M UTC")
-                            if not pd.isna(instant)
-                            else str(reception_row.get("reception_utc", ""))
+                        when = format_reception(
+                            instant if not pd.isna(instant) else reception_row.get("reception_utc", ""),
+                            preferences,
                         )
                         propagation = str(reception_row.get("propagation", "")).strip() or "Unspecified"
                         st.markdown(f"- {when} · {propagation}")

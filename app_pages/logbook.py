@@ -5,7 +5,14 @@ import streamlit as st
 
 from app_support import get_store, season_eligible_logs, season_marathons
 from dxcore.metrics import add_geography_keys
+from dxcore.presentation import (
+    display_log_table,
+    distance_column_label,
+    format_reception,
+    time_column_label,
+)
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_PROPAGATION_OPTIONS
+from modules.import_console import render_pending_import_reviews
 
 
 def clear_logbook_filters() -> None:
@@ -34,6 +41,7 @@ if logs.empty:
             f"None of your {len(all_logs):,} stored reception(s) meet the current "
             "Season 7 marathon criteria."
         )
+    render_pending_import_reviews()
     st.stop()
 
 outside_season = len(all_logs) - len(logs)
@@ -142,6 +150,8 @@ safe_columns = [
     "source",
 ]
 safe = filtered[safe_columns]
+preferences = st.session_state.user
+display_safe = display_log_table(safe, preferences)
 
 with st.container(horizontal=True):
     st.metric("Receptions", f"{len(safe):,}", border=True)
@@ -159,14 +169,14 @@ if filtered.empty:
 
 action_slot = st.container()
 event = st.dataframe(
-    safe,
+    display_safe,
     hide_index=True,
     on_select="rerun",
     selection_mode="single-row",
     key="my_logbook_table",
     column_config={
-        "distance_miles": st.column_config.NumberColumn("Miles", format="%.1f"),
-        "reception_utc": st.column_config.DatetimeColumn("Reception (UTC)", format="YYYY-MM-DD HH:mm"),
+        distance_column_label(preferences): st.column_config.NumberColumn(format="%.1f"),
+        time_column_label(preferences): st.column_config.TextColumn(pinned=True),
         "is_sdr": st.column_config.CheckboxColumn("SDR"),
         "is_portable": st.column_config.CheckboxColumn("Portable"),
     },
@@ -178,7 +188,11 @@ def edit_reception_dialog(record: dict[str, object]) -> None:
     st.markdown(f"**{record['call']} · {record['frequency']} {record['band']}**")
     original = pd.to_datetime(record["reception_utc"], utc=True).to_pydatetime()
     with st.form(f"edit_log_{record['log_id']}"):
-        reception_date = st.date_input("Reception date (UTC)", value=original.date())
+        reception_date = st.date_input(
+            "Reception date (UTC)",
+            value=original.date(),
+            max_value=datetime.now(timezone.utc).date(),
+        )
         reception_time = st.time_input("Reception time (UTC)", value=original.time().replace(tzinfo=None))
         propagation_options = (
             MW_PROPAGATION_OPTIONS
@@ -220,7 +234,7 @@ def edit_reception_dialog(record: dict[str, object]) -> None:
 def delete_reception_dialog(record: dict[str, object]) -> None:
     st.warning(
         f"Delete {record['call']} on {record['frequency']} {record['band']} from "
-        f"{pd.to_datetime(record['reception_utc'], utc=True):%Y-%m-%d %H:%M UTC}?"
+        f"{format_reception(record['reception_utc'], preferences)}?"
     )
     st.caption("The stable entry ID is retained as a deleted record so the future Google Sheet sync can update the exact row.")
     if st.button("Delete reception", icon=":material/delete:", type="primary"):
@@ -245,3 +259,6 @@ with action_slot:
                 delete_reception_dialog(selected_record)
     else:
         st.caption("Select a row below to activate the edit and delete controls.")
+
+st.divider()
+render_pending_import_reviews()

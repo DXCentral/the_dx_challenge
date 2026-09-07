@@ -38,6 +38,8 @@ def confirm_delete(kind: str, record_id: str, label: str, owner_id: str = "") ->
             deleted, message = get_store().delete_announcement(record_id)
         elif kind == "Reception":
             deleted, message = get_store().delete_log(owner_id, record_id)
+        elif kind == "Station override":
+            deleted, message = get_store().delete_station_override(record_id)
         else:
             deleted, message = get_store().delete_challenge(record_id)
         if deleted:
@@ -62,7 +64,13 @@ if st.button("Lock admin portal", icon=":material/lock:"):
 
 section = st.selectbox(
     "Administration area",
-    ["Announcements", "Challenges", "Support tickets", "Station review queue"],
+    [
+        "Announcements",
+        "Challenges",
+        "Support tickets",
+        "Station review queue",
+        "Station database",
+    ],
 )
 
 if section == "Announcements":
@@ -337,7 +345,7 @@ elif section == "Support tickets":
                         st.rerun()
                     st.error(message)
 
-else:
+elif section == "Station review queue":
     st.subheader("Station review queue")
     reviews = store.station_review_logs()
     if reviews.empty:
@@ -552,3 +560,144 @@ else:
 
         managed = store.station_overrides()
         st.caption(f"{len(managed):,} administrator-approved station addition(s) are currently active.")
+
+else:
+    st.subheader("Station database")
+    st.caption(
+        "Search the combined Season 7 station lists and save a managed correction. "
+        "The source CSV remains unchanged; the private Station Overrides tab becomes the authoritative record."
+    )
+    station_data = get_station_data()
+    managed_ids = set(store.station_overrides()["station_id"].astype(str))
+    filters = st.columns(4)
+    station_band = filters[0].selectbox("Band", ["All", "MW", "FM", "NWR"])
+    station_query = filters[1].text_input(
+        "Call sign / station", placeholder="Radio Reforma or callsign"
+    )
+    station_place = filters[2].text_input(
+        "City / region / country", placeholder="Panama"
+    )
+    frequency_query = filters[3].text_input(
+        "Frequency", placeholder="860 or 94.5"
+    )
+    matches = station_data.copy()
+    if station_band != "All":
+        matches = matches[matches["band"].astype(str).str.upper() == station_band]
+    if station_query.strip():
+        matches = matches[
+            matches["call"].astype(str).str.contains(
+                station_query.strip(), case=False, na=False, regex=False
+            )
+        ]
+    if station_place.strip():
+        place = station_place.strip()
+        place_match = pd.Series(False, index=matches.index)
+        for column in ["city", "region", "country", "county", "grid"]:
+            place_match |= matches[column].astype(str).str.contains(
+                place, case=False, na=False, regex=False
+            )
+        matches = matches[place_match]
+    if frequency_query.strip():
+        try:
+            target_frequency = float(frequency_query)
+            tolerance = 0.1 if station_band == "MW" else 0.001
+            matches = matches[
+                (pd.to_numeric(matches["frequency"], errors="coerce") - target_frequency).abs()
+                < tolerance
+            ]
+        except ValueError:
+            st.warning("Frequency must be numeric.")
+            matches = matches.iloc[0:0]
+    matches = matches.sort_values(["band", "frequency", "call", "city"])
+    st.caption(f"{len(matches):,} station(s) match. Refine the search if needed.")
+    if matches.empty:
+        st.info("No station matches these filters.")
+    else:
+        visible = matches.head(500).copy()
+        visible["Managed correction"] = visible["station_id"].astype(str).isin(managed_ids)
+        st.dataframe(
+            visible[
+                [
+                    "band", "frequency", "call", "city", "region", "country",
+                    "county", "grid", "latitude", "longitude", "Managed correction",
+                ]
+            ],
+            hide_index=True,
+        )
+        records = {
+            str(row["station_id"]): row for row in visible.to_dict("records")
+        }
+        selected_station_id = st.selectbox(
+            "Station to edit",
+            list(records),
+            format_func=lambda value: (
+                lambda row: (
+                    f"{row['band']} · {row['frequency']} · {row['call']} · "
+                    f"{row['city']}, {row['region']}, {row['country']}"
+                )
+            )(records[value]),
+        )
+        station = records[selected_station_id]
+        is_managed = selected_station_id in managed_ids
+        if is_managed:
+            st.badge("Managed correction active", icon=":material/edit_location:", color="orange")
+        with st.form(f"admin_station_database_{selected_station_id}"):
+            st.markdown(f"**Stable station ID:** `{selected_station_id}`")
+            columns = st.columns(3)
+            edit_band = columns[0].selectbox(
+                "Band",
+                ["MW", "FM", "NWR"],
+                index=["MW", "FM", "NWR"].index(str(station["band"]).upper()),
+            )
+            edit_frequency = columns[1].number_input(
+                "Frequency", value=float(station["frequency"]), step=0.001, format="%.3f"
+            )
+            edit_call = columns[2].text_input("Call / station name", value=str(station["call"]))
+            columns = st.columns(3)
+            edit_city = columns[0].text_input("City", value=str(station["city"]))
+            edit_region = columns[1].text_input("State / province / region", value=str(station["region"]))
+            edit_country = columns[2].text_input("Country", value=str(station["country"]))
+            columns = st.columns(2)
+            edit_county = columns[0].text_input("County / parish", value=str(station["county"]))
+            edit_grid = columns[1].text_input("Grid", value=str(station["grid"]))
+            columns = st.columns(2)
+            edit_latitude = columns[0].number_input(
+                "Latitude", min_value=-90.0, max_value=90.0,
+                value=float(station["latitude"]), format="%.6f"
+            )
+            edit_longitude = columns[1].number_input(
+                "Longitude", min_value=-180.0, max_value=180.0,
+                value=float(station["longitude"]), format="%.6f"
+            )
+            save_station = st.form_submit_button(
+                "Save station correction", icon=":material/save:", type="primary"
+            )
+        if save_station:
+            updated, message, _ = store.upsert_station_override(
+                {
+                    "station_id": selected_station_id,
+                    "band": edit_band,
+                    "frequency": edit_frequency,
+                    "call": edit_call,
+                    "city": edit_city,
+                    "region": edit_region,
+                    "country": edit_country,
+                    "county": edit_county,
+                    "grid": edit_grid,
+                    "latitude": edit_latitude,
+                    "longitude": edit_longitude,
+                    "source_log_id": "admin",
+                }
+            )
+            if updated:
+                st.session_state.admin_notice = message
+                st.rerun()
+            st.error(message)
+        if is_managed and st.button(
+            "Revert to source-list record", icon=":material/undo:"
+        ):
+            confirm_delete(
+                "Station override",
+                selected_station_id,
+                f"{station['call']} on {station['frequency']}",
+            )

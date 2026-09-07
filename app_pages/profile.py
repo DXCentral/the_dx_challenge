@@ -1,4 +1,5 @@
 from urllib.parse import quote
+from zoneinfo import available_timezones
 
 import streamlit as st
 from geopy.exc import GeopyError
@@ -19,7 +20,23 @@ from dxcore.geo import (
     valid_coordinates,
     valid_grid,
 )
+from dxcore.presentation import format_distance
 from dxcore.themes import THEMES
+
+
+COMMON_TIMEZONES = [
+    "UTC", "America/New_York", "America/Chicago", "America/Denver",
+    "America/Phoenix", "America/Los_Angeles", "America/Anchorage",
+    "Pacific/Honolulu", "America/Toronto", "America/Winnipeg",
+    "America/Edmonton", "America/Vancouver", "Europe/London", "Europe/Paris",
+    "Australia/Sydney",
+]
+
+
+@st.cache_data
+def timezone_options() -> list[str]:
+    choices = set(available_timezones())
+    return [*COMMON_TIMEZONES, *sorted(choices.difference(COMMON_TIMEZONES))]
 
 
 st.title("Profile settings")
@@ -90,6 +107,36 @@ with st.container(border=True):
             "Reduce animation and motion",
             value=bool(user.get("reduce_motion", False)),
         )
+        st.markdown("**Log display**")
+        preferences = st.columns(4)
+        time_display = preferences[0].selectbox(
+            "Show reception times in",
+            ["UTC", "Local time"],
+            index=0 if str(user.get("time_display", "UTC")) == "UTC" else 1,
+            help="All records remain stored in UTC. This changes display only.",
+        )
+        zones = timezone_options()
+        saved_zone = str(user.get("timezone_name", "UTC"))
+        if saved_zone not in zones:
+            saved_zone = "UTC"
+        timezone_name = preferences[1].selectbox(
+            "Local time zone",
+            zones,
+            index=zones.index(saved_zone),
+            disabled=time_display == "UTC",
+            help="IANA time zones automatically account for daylight-saving changes.",
+        )
+        clock_format = preferences[2].selectbox(
+            "Clock format",
+            ["24-hour", "12-hour"],
+            index=0 if str(user.get("clock_format", "24-hour")) == "24-hour" else 1,
+        )
+        distance_unit = preferences[3].selectbox(
+            "Distance units",
+            ["Miles", "Kilometers"],
+            index=0 if str(user.get("distance_unit", "Miles")) == "Miles" else 1,
+            help="Distances remain stored in miles. This changes display only.",
+        )
         save_display = st.form_submit_button(
             "Apply display settings", icon=":material/palette:", type="primary"
         )
@@ -99,9 +146,21 @@ with st.container(border=True):
             theme_name=theme_name,
             large_text=large_text,
             reduce_motion=reduce_motion,
+            timezone_name=timezone_name,
+            time_display=time_display,
+            clock_format=clock_format,
+            distance_unit=distance_unit,
         )
         st.session_state.user.update(
-            {"theme_name": theme_name, "large_text": large_text, "reduce_motion": reduce_motion}
+            {
+                "theme_name": theme_name,
+                "large_text": large_text,
+                "reduce_motion": reduce_motion,
+                "timezone_name": timezone_name,
+                "time_display": time_display,
+                "clock_format": clock_format,
+                "distance_unit": distance_unit,
+            }
         )
         st.session_state.profile_notice = f"{theme_name} display settings applied."
         st.rerun()
@@ -263,7 +322,8 @@ else:
             selected_row["longitude"],
         )
         st.caption(
-            f"Distance from current Home QTH: {movement:,.1f} miles. Existing locations and their reception history remain available after the change."
+            f"Distance from current Home QTH: {format_distance(movement, user)}. "
+            "Existing locations and their reception history remain available after the change."
         )
     if st.button("Update Home QTH", icon=":material/home_pin:"):
         store.set_home_location(user["user_id"], new_home)

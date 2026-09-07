@@ -8,6 +8,7 @@ import streamlit as st
 from app_support import display_names, get_store, season_eligible_logs, season_marathons
 from dxcore.awards import AWARDS, component_progress, qualifying_rows, simple_progress
 from dxcore.metrics import canonical_daypart, canonical_propagation
+from dxcore.presentation import display_log_table, format_distance
 
 
 st.title("Awards")
@@ -94,7 +95,13 @@ with st.container(border=True):
             if rule.get("long_distance"):
                 user_rows = rows[rows["user_id"] == row["user_id"]].drop_duplicates("station_id")
                 long_count = int((user_rows["distance_miles"] >= 800).sum())
-                st.progress(min(long_count / int(rule["long_distance"]), 1.0), text=f"{long_count:,} of {rule['long_distance']} stations at 800+ miles")
+                st.progress(
+                    min(long_count / int(rule["long_distance"]), 1.0),
+                    text=(
+                        f"{long_count:,} of {rule['long_distance']} stations at "
+                        f"{format_distance(800, st.session_state.user, 0)} or farther"
+                    ),
+                )
 
 st.subheader("Counted receptions")
 detail_user = st.session_state.user["user_id"]
@@ -118,4 +125,10 @@ else:
         detail = detail[detail["award_propagation"].isin(components)].drop_duplicates("station_id")
     else:
         detail = detail[detail[str(rule["field"])].fillna("").astype(str) != ""].drop_duplicates(str(rule["field"]))
-    st.dataframe(detail[["reception_utc", "call", "frequency", "station_city", "station_region", "station_country", "station_county", "station_grid", "propagation", "distance_miles"]], hide_index=True)
+    st.dataframe(
+        display_log_table(
+            detail[["reception_utc", "call", "frequency", "station_city", "station_region", "station_country", "station_county", "station_grid", "propagation", "distance_miles"]],
+            st.session_state.user,
+        ),
+        hide_index=True,
+    )

@@ -7,10 +7,17 @@ import pandas as pd
 import streamlit as st
 from geopy.geocoders import Nominatim
 
-from app_support import active_challenges_for_band, get_station_data, get_store, require_location
+from app_support import (
+    active_challenges_for_band,
+    get_station_data,
+    get_store,
+    require_location,
+    season_eligible_logs,
+)
 from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_PROPAGATION_OPTIONS
+from dxcore.presentation import convert_distance, distance_column_label, distance_is_km, format_distance
 from dxcore.solar import mw_propagation
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
 from modules.import_console import render_import_console
@@ -65,6 +72,7 @@ st.caption("Select a station, review the complete reception, then submit. Nothin
 location = require_location()
 store = get_store()
 user_id = st.session_state.user["user_id"]
+preferences = st.session_state.user
 
 band_options = {"key": "log_band", "persist_state": "session"}
 if "log_band" not in st.session_state:
@@ -175,7 +183,7 @@ source = "station_list"
 
 if entry_mode == "Station list":
     nearby_only = st.toggle(
-        "Limit station list to 200 miles",
+        "Limit station list to 322 km" if distance_is_km(preferences) else "Limit station list to 200 miles",
         value=False,
         key=f"log_nearby_only_{band}",
         help="Leave this off for normal DX logging. Turn it on when you only want nearby targets.",
@@ -208,7 +216,7 @@ if entry_mode == "Station list":
                 axis=1,
             )
         ].reset_index(drop=True)
-    existing = store.logs(user_id)
+    existing = season_eligible_logs(store.logs(user_id))
     heard_ids = set(existing["station_id"]) if not existing.empty else set()
     if matches.empty:
         message = "No stations match this frequency and distance range."
@@ -261,7 +269,12 @@ if entry_mode == "Station list":
         )
 
     table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
-    view = table_matches[["frequency", "call", "city", "region", "country", "county", "grid", "distance_miles", "logged"]].rename(
+    distance_label = distance_column_label(preferences)
+    view = table_matches[["frequency", "call", "city", "region", "country", "county", "grid", "logged"]].copy()
+    view[distance_label] = table_matches["distance_miles"].map(
+        lambda value: convert_distance(value, preferences)
+    )
+    view = view[["frequency", "call", "city", "region", "country", "county", "grid", distance_label, "logged"]].rename(
         columns={
             "frequency": "Frequency",
             "call": "Station",
@@ -270,7 +283,6 @@ if entry_mode == "Station list":
             "country": "Country",
             "county": "County / parish",
             "grid": "Grid",
-            "distance_miles": "Miles",
             "logged": "History",
         }
     )
@@ -290,7 +302,7 @@ if entry_mode == "Station list":
         key=f"log_station_table_{band}_{str(frequency).replace('.', '_')}",
         column_config={
             "Frequency": st.column_config.NumberColumn(format="%.3f"),
-            "Miles": st.column_config.NumberColumn(format="%.1f"),
+            distance_label: st.column_config.NumberColumn(format="%.1f"),
         },
         lazy=False,
     )
@@ -346,7 +358,8 @@ with st.container(border=True):
     st.subheader("Review reception")
     st.markdown(
         f"**{selected['call']}** · {format_frequency(band, float(selected['frequency']))} · "
-        f"{selected['city']}, {selected['region']}, {selected['country']} · {selected['distance_miles']:.1f} miles"
+        f"{selected['city']}, {selected['region']}, {selected['country']} · "
+        f"{format_distance(selected['distance_miles'], preferences)}"
     )
     if eligible_sprints:
         st.caption(
@@ -367,7 +380,9 @@ with st.container(border=True):
     with st.form(f"review_log_{selected['station_id']}"):
         if timing == "From recording":
             reception_date = st.date_input(
-                "Reception date (UTC)", value=st.session_state.get("last_recording_date", now.date())
+                "Reception date (UTC)",
+                value=st.session_state.get("last_recording_date", now.date()),
+                max_value=now.date(),
             )
             reception_time = st.time_input("Reception time (UTC)", value=time(now.hour, now.minute))
             reception = datetime.combine(reception_date, reception_time, tzinfo=timezone.utc)

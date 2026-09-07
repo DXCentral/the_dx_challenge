@@ -12,6 +12,7 @@ import streamlit as st
 from app_support import display_names, get_store, season_eligible_logs, season_marathons
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.metrics import add_geography_keys, normalize_county
+from dxcore.presentation import display_log_table
 from dxcore.subdivisions import subdivision_counts, subdivision_figure
 from dxcore.themes import THEMES
 
@@ -686,4 +687,8 @@ safe_columns = [
     "station_country", "station_county", "station_grid", "distance_miles", "propagation",
     "is_sdr", "is_portable", "notes",
 ]
-st.dataframe(filtered[safe_columns], hide_index=True, key="stats_filtered_receptions")
+st.dataframe(
+    display_log_table(filtered[safe_columns], st.session_state.user),
+    hide_index=True,
+    key="stats_filtered_receptions",
+)
