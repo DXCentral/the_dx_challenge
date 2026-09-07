@@ -294,6 +294,10 @@ def initialize_app_state() -> None:
         "large_text": bool(profile.get("large_text", 0)),
         "reduce_motion": bool(profile.get("reduce_motion", 0)),
         "walkthrough_complete": bool(profile.get("walkthrough_complete", 0)),
+        "timezone_name": str(profile.get("timezone_name", "UTC")),
+        "time_display": str(profile.get("time_display", "UTC")),
+        "clock_format": str(profile.get("clock_format", "24-hour")),
+        "distance_unit": str(profile.get("distance_unit", "Miles")),
     }
     st.session_state.setdefault("active_location_id", "")
     if "pending_active_location_id" in st.session_state:

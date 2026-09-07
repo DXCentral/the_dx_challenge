@@ -63,9 +63,10 @@ Routine deployed content is now managed from the protected **Admin** page:
 seeds. Release notes, privacy text, and the support email remain repository-managed
 Markdown/text files.
 
-The first launch of this release also creates or validates the **Challenges** tab and
-adds the new review/support columns without dropping existing Sheet columns. It also
-creates a private **Shoutout Status** tab used only for the administrator's durable
+The first launch of this release also creates or validates **Challenges**, **Import
+Review**, and the other managed tabs without dropping existing Sheet columns. Import
+Review holds a DXer's unresolved upload rows so they can finish later from My Logbook.
+The private **Shoutout Status** tab is used only for the administrator's durable
 read-on-air flags; the published WPForms response feed remains read-only.
 
 ## Keep staging and production isolated
@@ -79,10 +80,10 @@ read-on-air flags; the published WPForms response feed remains read-only.
 5. Keep `main` as production. Make a separate restricted **production copy** of the
    staging Sheet and share that copy with the service account as Editor. In the copy
    only, preserve the header row but clear the data rows from **Users**, **Locations**,
-   **Logging Entries**, **Bandscan**, **Import Batches**, **Support Tickets**, and
-   **Shoutout Status**. Keep **Challenges**, **Announcements**, and reviewed **Station
-   Overrides** so production retains the approved operating configuration. Put only
-   this copied Sheet's ID in production Secrets.
+   **Logging Entries**, **Bandscan**, **Import Batches**, **Import Review**, **Support
+   Tickets**, and **Shoutout Status**. Keep **Challenges**, **Announcements**, and
+   reviewed **Station Overrides** so production retains the approved operating
+   configuration. Put only this copied Sheet's ID in production Secrets.
 6. Reboot both apps and confirm their app bars say **Staging** and **Production** and
    show different final eight characters for their private Sheet IDs.
 
