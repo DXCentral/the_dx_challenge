@@ -414,6 +414,21 @@ class LocalStore:
                 [tuple(row.get(column, "") for column in columns) for row in rows],
             )
 
+    def replace_sheet_rows(self, sheet_name: str, rows: list[dict[str, object]]) -> None:
+        """Replace one local cache table with the exact remote Sheet contents."""
+        if sheet_name not in SHEET_TABLES:
+            return
+        table = SHEET_TABLES[sheet_name]
+        columns = SHEET_SCHEMAS[sheet_name]
+        placeholders = ",".join("?" for _ in columns)
+        with self.connect() as connection:
+            connection.execute(f'DELETE FROM "{table}"')
+            if rows:
+                connection.executemany(
+                    f'INSERT INTO "{table}"({",".join(columns)}) VALUES ({placeholders})',
+                    [tuple(row.get(column, "") for column in columns) for row in rows],
+                )
+
     def update_user_preferences(
         self,
         user_id: str,
