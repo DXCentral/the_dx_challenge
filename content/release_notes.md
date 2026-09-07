@@ -1,3 +1,7 @@
+### Version 1.0.0-rc10.5.1 · Community guide hotfix
+
+- Made the Community page's user-guide link self-contained so the page remains compatible during staggered or partial GitHub deployments.
+
 ### Version 1.0.0-rc10.5 · User guide access
 
 - Added a prominent Community-page button that opens the complete illustrated Version 1.0 user guide directly from its permanent GitHub release URL.
