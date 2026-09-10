@@ -14,8 +14,15 @@ from app_support import (
     season_eligible_logs,
 )
 from dxcore.awards import award_milestones
-from dxcore.config import APP_VERSION, CONTENT_DIR, USER_GUIDE_URL
+from dxcore.config import APP_VERSION, CONTENT_DIR
 from dxcore.shoutouts import CATEGORY_PRESENTATION, media_filename, observed_categories
+
+
+USER_GUIDE_URL = (
+    "https://raw.githubusercontent.com/DXCentral/the_dx_challenge/"
+    "a1cf205714a2d03c6aa0c10cdcf56960a1385002/"
+    "The_DX_Challenge_User_Guide_v1.0%20Complete.pdf"
+)
 
 
 def read_content(name: str, fallback: str) -> str:
@@ -62,6 +69,31 @@ st.caption("Celebrate standout catches and DX milestones without exposing privat
 with st.container(horizontal=True, vertical_alignment="center"):
     st.badge(f"Version {APP_VERSION}", icon=":material/new_releases:", color="blue")
     st.caption(f"Season 7 {app_environment().title()} build")
+
+with st.container(border=True):
+    st.subheader("Privacy & transparency")
+    st.write(
+        "We use account and challenge information only to operate The DX Challenge. "
+        "We do not sell participant data or use it for targeted advertising."
+    )
+    with st.container(horizontal=True, gap="small"):
+        st.badge("No Google passwords", icon=":material/lock:", color="green")
+        st.badge("No data sales", icon=":material/shield:", color="green")
+        st.badge("AI-assisted development", icon=":material/smart_toy:", color="blue")
+    st.caption(
+        "The App was coded with generative-AI assistance under human direction. "
+        "The deployed App does not send participant records to an AI model."
+    )
+    with st.expander(
+        "Read the full privacy policy and service disclaimer",
+        icon=":material/policy:",
+    ):
+        st.markdown(
+            read_content(
+                "privacy_policy.md",
+                "The privacy policy is being prepared for the public Season 7 launch.",
+            )
+        )
 
 with st.container(border=True):
     st.subheader("User guide")
@@ -300,14 +332,5 @@ with st.container(border=True):
         read_content(
             "release_notes.md",
             "Release notes will be published here as testing builds are promoted.",
-        )
-    )
-
-with st.container(border=True):
-    st.subheader("Privacy policy and disclaimer")
-    st.markdown(
-        read_content(
-            "privacy_policy.md",
-            "The privacy policy is being prepared for the public Season 7 launch.",
         )
     )
