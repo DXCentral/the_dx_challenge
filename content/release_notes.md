@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.6 · Privacy and AI transparency
+
+- Replaced the short disclaimer with a detailed privacy policy explaining the information collected, how it is used, what other participants can see, service providers, security, retention, user choices, and support requests.
+- Added a prominent Privacy & transparency card near the top of Community with clear no-password and no-data-sale statements.
+- Added an explicit disclosure that The DX Challenge was coded with generative-AI assistance under human direction while the deployed App does not send participant records to an AI model.
+
 ### Version 1.0.0-rc10.5.1 · Community guide hotfix
 
 - Made the Community page's user-guide link self-contained so the page remains compatible during staggered or partial GitHub deployments.

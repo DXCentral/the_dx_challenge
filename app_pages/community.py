@@ -71,6 +71,31 @@ with st.container(horizontal=True, vertical_alignment="center"):
     st.caption(f"Season 7 {app_environment().title()} build")
 
 with st.container(border=True):
+    st.subheader("Privacy & transparency")
+    st.write(
+        "We use account and challenge information only to operate The DX Challenge. "
+        "We do not sell participant data or use it for targeted advertising."
+    )
+    with st.container(horizontal=True, gap="small"):
+        st.badge("No Google passwords", icon=":material/lock:", color="green")
+        st.badge("No data sales", icon=":material/shield:", color="green")
+        st.badge("AI-assisted development", icon=":material/smart_toy:", color="blue")
+    st.caption(
+        "The App was coded with generative-AI assistance under human direction. "
+        "The deployed App does not send participant records to an AI model."
+    )
+    with st.expander(
+        "Read the full privacy policy and service disclaimer",
+        icon=":material/policy:",
+    ):
+        st.markdown(
+            read_content(
+                "privacy_policy.md",
+                "The privacy policy is being prepared for the public Season 7 launch.",
+            )
+        )
+
+with st.container(border=True):
     st.subheader("User guide")
     st.write(
         "New to The DX Challenge, or looking for a feature? The complete illustrated "
@@ -307,14 +332,5 @@ with st.container(border=True):
         read_content(
             "release_notes.md",
             "Release notes will be published here as testing builds are promoted.",
-        )
-    )
-
-with st.container(border=True):
-    st.subheader("Privacy policy and disclaimer")
-    st.markdown(
-        read_content(
-            "privacy_policy.md",
-            "The privacy policy is being prepared for the public Season 7 launch.",
         )
     )
