@@ -1,3 +1,8 @@
+### Version 1.0.0-rc10.7 · Recording timestamp memory
+
+- Made both the UTC date and UTC time remain in place after a successful From recording submission, speeding up entry of multiple stations heard in the same recording.
+- Kept Live DX tied to the current UTC timestamp and prevented rejected duplicate submissions from replacing the last successfully used recording timestamp.
+
 ### Version 1.0.0-rc10.6 · Privacy and AI transparency
 
 - Replaced the short disclaimer with a detailed privacy policy explaining the information collected, how it is used, what other participants can see, service providers, security, retention, user choices, and support requests.

@@ -384,7 +384,12 @@ with st.container(border=True):
                 value=st.session_state.get("last_recording_date", now.date()),
                 max_value=now.date(),
             )
-            reception_time = st.time_input("Reception time (UTC)", value=time(now.hour, now.minute))
+            reception_time = st.time_input(
+                "Reception time (UTC)",
+                value=st.session_state.get(
+                    "last_recording_time", time(now.hour, now.minute)
+                ),
+            )
             reception = datetime.combine(reception_date, reception_time, tzinfo=timezone.utc)
         else:
             reception = now
@@ -424,8 +429,6 @@ with st.container(border=True):
         submitted = st.form_submit_button("Submit reception", icon=":material/send:", type="primary")
 
     if submitted:
-        if timing == "From recording":
-            st.session_state.last_recording_date = reception.date()
         accepted, message = store.append_log(
             {
                 "user_id": user_id,
@@ -452,6 +455,11 @@ with st.container(border=True):
             }
         )
         if accepted:
+            if timing == "From recording":
+                st.session_state.last_recording_date = reception.date()
+                st.session_state.last_recording_time = reception.time().replace(
+                    tzinfo=None
+                )
             st.success("Reception saved. Band and frequency selections remain in place.")
             st.session_state.pop("manual_station_pending", None)
         else:
