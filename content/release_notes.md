@@ -1,3 +1,8 @@
+### Version 1.0.0-rc10.14.1 · Station-map grayline hotfix
+
+- Corrected the smooth grayline raster's Deck.gl serialization so Streamlit sends its embedded image as a literal data URL instead of trying to parse `data:image` as a JavaScript expression.
+- Added a serialized-chart regression test that rejects the invalid expression-prefixed form before deployment.
+
 ### Version 1.0.0-rc10.14 · Smooth grayline and map labels
 
 - Replaced the block-style grayline cells with a lightweight smooth day/twilight/night raster and a curved solar-terminator line that follows the familiar presentation used by DX grayline maps.

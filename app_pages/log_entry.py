@@ -8,6 +8,7 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 from geopy.geocoders import Nominatim
+from pydeck.types import String as DeckString
 
 from app_support import (
     active_challenges_for_band,
@@ -522,7 +523,10 @@ if entry_mode in {"Station list", "Station map"}:
                     pdk.Layer(
                         "BitmapLayer",
                         id="grayline-shading",
-                        image=grayline_image,
+                        # PyDeck otherwise prefixes a data URI with "@@=", causing
+                        # Streamlit's browser-side JSON converter to parse the colon
+                        # in "data:image" as JavaScript instead of a literal URL.
+                        image=DeckString(grayline_image),
                         bounds=[-180, -90, 180, 90],
                         opacity=1,
                         pickable=False,
