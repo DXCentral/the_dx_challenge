@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
 import math
 import re
+import struct
 import unicodedata
+import zlib
 from datetime import datetime, timezone
 from functools import lru_cache
 
+import numpy as np
 import pandas as pd
 
 from dxcore.config import (
@@ -99,52 +103,119 @@ def _solar_position(moment: datetime) -> tuple[float, float]:
     return math.degrees(declination), longitude
 
 
+def _png_data_uri(rgba: np.ndarray) -> str:
+    """Encode an RGBA array as a dependency-free PNG data URI."""
+    height, width, channels = rgba.shape
+    if channels != 4:
+        raise ValueError("Grayline raster must contain RGBA pixels")
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
+
+    scanlines = b"".join(b"\x00" + rgba[row].tobytes() for row in range(height))
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(scanlines, level=9))
+        + chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _grayline_raster(solar_latitude: float, solar_longitude: float) -> str:
+    """Build smooth day, civil-twilight, and night shading at 0.5-degree resolution."""
+    latitudes = np.radians(np.linspace(89.75, -89.75, 360, dtype=np.float64))[:, None]
+    longitudes = np.radians(np.linspace(-179.75, 179.75, 720, dtype=np.float64))[None, :]
+    solar_latitude_radians = math.radians(solar_latitude)
+    hour_angle = longitudes - math.radians(solar_longitude)
+    sine_altitude = (
+        np.sin(latitudes) * math.sin(solar_latitude_radians)
+        + np.cos(latitudes) * math.cos(solar_latitude_radians) * np.cos(hour_angle)
+    )
+    altitude = np.degrees(np.arcsin(np.clip(sine_altitude, -1.0, 1.0)))
+
+    daylight = np.array([255.0, 244.0, 178.0, 28.0])
+    twilight = np.array([255.0, 156.0, 40.0, 92.0])
+    darkness = np.array([17.0, 30.0, 60.0, 104.0])
+    rgba = np.empty((*altitude.shape, 4), dtype=np.float64)
+
+    night_mix = np.clip((altitude + 6.0) / 6.0, 0.0, 1.0)[..., None]
+    day_mix = np.clip(altitude / 6.0, 0.0, 1.0)[..., None]
+    rgba[:] = darkness
+    night_to_twilight = altitude >= -6.0
+    rgba[night_to_twilight] = (
+        darkness + (twilight - darkness) * night_mix
+    )[night_to_twilight]
+    twilight_to_day = altitude >= 0.0
+    rgba[twilight_to_day] = (
+        twilight + (daylight - twilight) * day_mix
+    )[twilight_to_day]
+    return _png_data_uri(np.rint(rgba).astype(np.uint8))
+
+
+def _terminator_paths(
+    solar_latitude: float, solar_longitude: float
+) -> tuple[dict[str, object], ...]:
+    """Return a smooth great-circle solar terminator split safely at the date line."""
+    latitude = math.radians(solar_latitude)
+    longitude = math.radians(solar_longitude)
+    sun = np.array(
+        [
+            math.cos(latitude) * math.cos(longitude),
+            math.cos(latitude) * math.sin(longitude),
+            math.sin(latitude),
+        ]
+    )
+    reference = np.array([0.0, 0.0, 1.0])
+    first_axis = np.cross(sun, reference)
+    if np.linalg.norm(first_axis) < 1e-9:
+        reference = np.array([0.0, 1.0, 0.0])
+        first_axis = np.cross(sun, reference)
+    first_axis /= np.linalg.norm(first_axis)
+    second_axis = np.cross(sun, first_axis)
+
+    segments: list[dict[str, object]] = []
+    segment: list[list[float]] = []
+    for angle in np.linspace(0.0, 2.0 * math.pi, 721):
+        point = first_axis * math.cos(angle) + second_axis * math.sin(angle)
+        point_longitude = math.degrees(math.atan2(point[1], point[0]))
+        point_latitude = math.degrees(math.asin(float(np.clip(point[2], -1.0, 1.0))))
+        coordinate = [point_longitude, point_latitude]
+        if segment and abs(point_longitude - segment[-1][0]) > 180.0:
+            if len(segment) > 1:
+                segments.append({"path": segment})
+            segment = [coordinate]
+        else:
+            segment.append(coordinate)
+    if len(segment) > 1:
+        segments.append({"path": segment})
+    return tuple(segments)
+
+
 @lru_cache(maxsize=12)
-def _grayline_cells_for_minute(minute_key: str) -> tuple[dict[str, object], ...]:
+def _grayline_overlay_for_minute(
+    minute_key: str,
+) -> tuple[str, tuple[dict[str, object], ...]]:
     moment = datetime.fromisoformat(minute_key).replace(tzinfo=timezone.utc)
     solar_latitude, solar_longitude = _solar_position(moment)
-    solar_latitude_radians = math.radians(solar_latitude)
-    cells: list[dict[str, object]] = []
-    colors = {
-        "Daylight": [255, 244, 178, 34],
-        "Grayline": [255, 156, 40, 88],
-        "Darkness": [17, 30, 60, 96],
-    }
-    for latitude in range(-90, 90, 5):
-        center_latitude = latitude + 2.5
-        latitude_radians = math.radians(center_latitude)
-        for longitude in range(-180, 180, 5):
-            center_longitude = longitude + 2.5
-            hour_angle = math.radians(center_longitude - solar_longitude)
-            sine_altitude = (
-                math.sin(latitude_radians) * math.sin(solar_latitude_radians)
-                + math.cos(latitude_radians)
-                * math.cos(solar_latitude_radians)
-                * math.cos(hour_angle)
-            )
-            altitude = math.degrees(math.asin(max(-1.0, min(1.0, sine_altitude))))
-            status = "Darkness" if altitude < -6 else "Daylight" if altitude > 6 else "Grayline"
-            cells.append(
-                {
-                    "polygon": [
-                        [longitude, latitude],
-                        [longitude + 5, latitude],
-                        [longitude + 5, latitude + 5],
-                        [longitude, latitude + 5],
-                        [longitude, latitude],
-                    ],
-                    "color": colors[status],
-                    "status": status,
-                }
-            )
-    return tuple(cells)
+    return (
+        _grayline_raster(solar_latitude, solar_longitude),
+        _terminator_paths(solar_latitude, solar_longitude),
+    )
 
 
-def grayline_cells(moment: datetime | None = None) -> tuple[list[dict[str, object]], datetime]:
+def grayline_overlay(
+    moment: datetime | None = None,
+) -> tuple[str, list[dict[str, object]], datetime]:
     instant = (moment or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
         second=0, microsecond=0
     )
-    return list(_grayline_cells_for_minute(instant.replace(tzinfo=None).isoformat())), instant
+    image, paths = _grayline_overlay_for_minute(
+        instant.replace(tzinfo=None).isoformat()
+    )
+    return image, list(paths), instant
 
 
 def admin1_progress_geojson(logs: pd.DataFrame) -> tuple[dict[str, object], int]:
