@@ -140,6 +140,19 @@ def _aliases() -> dict[str, dict[str, str]]:
 SUBDIVISION_ALIASES = _aliases()
 
 
+@lru_cache(maxsize=1)
+def north_america_admin1_geojson() -> dict[str, object]:
+    """Return non-interactive U.S., Canadian, and Mexican admin-1 boundaries."""
+    with ADMIN1_GEOJSON_FILE.open(encoding="utf-8") as handle:
+        source = json.load(handle)
+    features = [
+        feature
+        for feature in source.get("features", [])
+        if feature.get("properties", {}).get("adm0_a3") in {"USA", "CAN", "MEX"}
+    ]
+    return {"type": "FeatureCollection", "features": features}
+
+
 @lru_cache(maxsize=2)
 def subdivision_geojson(country_code: str) -> dict[str, object]:
     code = str(country_code).upper()
