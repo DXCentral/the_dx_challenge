@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.14 · Smooth grayline and map labels
+
+- Replaced the block-style grayline cells with a lightweight smooth day/twilight/night raster and a curved solar-terminator line that follows the familiar presentation used by DX grayline maps.
+- Made station call labels use crisp SDF text that scales within readable limits as the map zoom changes instead of becoming enlarged and blurry.
+- Remembered label visibility independently for each band and made FM labels default to off because of its much denser station map.
+
 ### Version 1.0.0-rc10.13 · Station intelligence and map overlays
 
 - Added WTFDA format and station-slogan data to FM station-list rows and Station map hover details.

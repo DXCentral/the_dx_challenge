@@ -31,7 +31,7 @@ from dxcore.station_map import (
     admin1_progress_geojson,
     country_progress_geojson,
     county_progress_geojson,
-    grayline_cells,
+    grayline_overlay,
     heard_grid_polygons,
     maidenhead_grid_lines,
 )
@@ -500,8 +500,9 @@ if entry_mode in {"Station list", "Station map"}:
             )
             show_call_labels = st.toggle(
                 "Show station call labels",
-                value=True,
-                key="station_map_show_call_labels",
+                value=band != "FM",
+                key=f"station_map_show_call_labels_{band}",
+                help="Labels are off by default for FM because of its much denser station list. Your choice is remembered separately for each band.",
             )
             if overlay == "Grayline now":
                 st.button(
@@ -515,22 +516,34 @@ if entry_mode in {"Station list", "Station map"}:
         ].copy() if not existing.empty else existing.copy()
         map_layers: list[pdk.Layer] = []
         if overlay == "Grayline now":
-            grayline_rows, grayline_time = grayline_cells()
-            map_layers.append(
-                pdk.Layer(
-                    "PolygonLayer",
-                    id="grayline-overlay",
-                    data=grayline_rows,
-                    get_polygon="polygon",
-                    get_fill_color="color",
-                    stroked=False,
-                    filled=True,
-                    pickable=False,
-                )
+            grayline_image, terminator_paths, grayline_time = grayline_overlay()
+            map_layers.extend(
+                [
+                    pdk.Layer(
+                        "BitmapLayer",
+                        id="grayline-shading",
+                        image=grayline_image,
+                        bounds=[-180, -90, 180, 90],
+                        opacity=1,
+                        pickable=False,
+                    ),
+                    pdk.Layer(
+                        "PathLayer",
+                        id="grayline-terminator",
+                        data=terminator_paths,
+                        get_path="path",
+                        get_color=[255, 184, 77, 235],
+                        get_width=2,
+                        width_units="pixels",
+                        width_min_pixels=1.5,
+                        width_max_pixels=3,
+                        pickable=False,
+                    ),
+                ]
             )
             overlay_caption = (
                 f"Grayline calculated for {grayline_time:%Y-%m-%d %H:%M UTC}. "
-                "Pale gold is daylight, amber is the approximate ±6° twilight zone, and navy is darkness."
+                "The curved amber line marks the solar terminator; the smooth shading transitions through the approximate ±6° twilight zone."
             )
         elif overlay == "States / provinces heard":
             progress_geojson, heard_count = admin1_progress_geojson(band_history)
@@ -665,14 +678,17 @@ if entry_mode in {"Station list", "Station map"}:
                     get_position="[longitude, latitude]",
                     get_text="call_label",
                     get_color=label_color,
-                    get_size=12,
-                    size_units="pixels",
+                    get_size=14_000,
+                    size_units="meters",
+                    size_min_pixels=8,
+                    size_max_pixels=15,
                     get_pixel_offset=[0, -10],
                     get_alignment_baseline="'bottom'",
                     outline_width=3,
                     outline_color=label_outline_color,
                     font_settings={"sdf": True},
                     font_family="Arial Narrow, Arial, sans-serif",
+                    billboard=True,
                     pickable=False,
                 )
             )
