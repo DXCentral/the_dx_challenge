@@ -1,3 +1,11 @@
+### Version 1.0.0-rc10.13 · Station intelligence and map overlays
+
+- Added WTFDA format and station-slogan data to FM station-list rows and Station map hover details.
+- Added a current grayline overlay as the Station map default, with separate daylight, approximate ±6° twilight, and darkness shading plus an on-demand refresh control.
+- Added selectable heard/unheard progress overlays for U.S./Canadian/Mexican states and provinces, worldwide 4-character Maidenhead grids, U.S. counties/parishes, and countries or territories; each uses season-scoped logs from the selected band.
+- Added default-on station call labels beside map markers and the DXer's last-heard timestamp to station hover details.
+- Kept every overlay and label layer non-interactive so station markers remain the sole click target for opening the reception review form.
+
 ### Version 1.0.0-rc10.12 · North American map boundaries
 
 - Added U.S. state, Canadian province/territory, and Mexican state borders to the interactive Station map on Log Entry.

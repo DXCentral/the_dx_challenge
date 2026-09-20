@@ -19,8 +19,22 @@ from app_support import (
 from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_PROPAGATION_OPTIONS
-from dxcore.presentation import convert_distance, distance_column_label, distance_is_km, format_distance
+from dxcore.presentation import (
+    convert_distance,
+    distance_column_label,
+    distance_is_km,
+    format_distance,
+    format_reception,
+)
 from dxcore.solar import mw_propagation
+from dxcore.station_map import (
+    admin1_progress_geojson,
+    country_progress_geojson,
+    county_progress_geojson,
+    grayline_cells,
+    heard_grid_polygons,
+    maidenhead_grid_lines,
+)
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
 from dxcore.subdivisions import north_america_admin1_geojson
 from dxcore.themes import THEMES
@@ -276,17 +290,22 @@ if entry_mode in {"Station list", "Station map"}:
         table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
         distance_label = distance_column_label(preferences)
         view_columns = ["frequency", "call", "city", "region", "country"]
+        if band in {"MW", "FM"}:
+            view_columns.extend(["format", "network_slogan"])
         if band == "MW":
-            view_columns.extend(["format", "network_slogan", "station_notes"])
+            view_columns.append("station_notes")
         view_columns.extend(["county", "grid", "logged"])
         view = table_matches[view_columns].copy()
         view[distance_label] = table_matches["distance_miles"].map(
             lambda value: convert_distance(value, preferences)
         )
         ordered_columns = ["frequency", "call", "city", "region", "country"]
+        if band in {"MW", "FM"}:
+            ordered_columns.extend(["format", "network_slogan"])
         if band == "MW":
-            ordered_columns.extend(["format", "network_slogan", "station_notes"])
+            ordered_columns.append("station_notes")
         ordered_columns.extend(["county", "grid", distance_label, "logged"])
+        slogan_column_label = "Slogan" if band == "FM" else "Network / slogan"
         view = view[ordered_columns].rename(
             columns={
                 "frequency": "Frequency",
@@ -295,7 +314,7 @@ if entry_mode in {"Station list", "Station map"}:
                 "region": "State / province",
                 "country": "Country",
                 "format": "Format",
-                "network_slogan": "Network / slogan",
+                "network_slogan": slogan_column_label,
                 "station_notes": "FM //s / notes",
                 "county": "County / parish",
                 "grid": "Grid",
@@ -307,6 +326,8 @@ if entry_mode in {"Station list", "Station map"}:
                 "Format, network/slogan, and FM parallel or identification notes "
                 "are provided courtesy of Tim Tromp."
             )
+        elif band == "FM":
+            st.caption("FM format and slogan information is provided by the WTFDA station data.")
         styled_view = view.style.apply(
             lambda row: [
                 "background-color: #BFE8D0; color: #123B26; font-weight: 600"
@@ -322,14 +343,15 @@ if entry_mode in {"Station list", "Station map"}:
             "Station": st.column_config.TextColumn(pinned=True),
             distance_label: st.column_config.NumberColumn(format="%.1f"),
         }
-        if band == "MW":
+        if band in {"MW", "FM"}:
             station_column_config.update(
                 {
                     "Format": st.column_config.TextColumn(width="medium"),
-                    "Network / slogan": st.column_config.TextColumn(width="medium"),
-                    "FM //s / notes": st.column_config.TextColumn(width="large"),
+                    slogan_column_label: st.column_config.TextColumn(width="medium"),
                 }
             )
+        if band == "MW":
+            station_column_config["FM //s / notes"] = st.column_config.TextColumn(width="large")
         event = st.dataframe(
             styled_view,
             hide_index=True,
@@ -377,6 +399,25 @@ if entry_mode in {"Station list", "Station map"}:
         map_matches["distance_label"] = map_matches["distance_miles"].map(
             lambda value: format_distance(float(value), preferences)
         )
+        last_heard = existing.copy()
+        if not last_heard.empty:
+            last_heard["reception_utc"] = pd.to_datetime(
+                last_heard["reception_utc"], utc=True, errors="coerce"
+            )
+            last_heard_lookup = (
+                last_heard.dropna(subset=["reception_utc"])
+                .groupby("station_id")["reception_utc"]
+                .max()
+                .to_dict()
+            )
+        else:
+            last_heard_lookup = {}
+        map_matches["last_heard_label"] = map_matches["station_id"].map(
+            lambda station_id: format_reception(last_heard_lookup[station_id], preferences)
+            if station_id in last_heard_lookup
+            else "Unheard"
+        )
+        map_matches["call_label"] = map_matches["call"].fillna("").astype(str).str.strip()
         for column in [
             "call",
             "city",
@@ -399,18 +440,26 @@ if entry_mode in {"Station list", "Station map"}:
             "<b>County / parish:</b> {county}<br/>"
             "<b>Grid:</b> {grid}<br/>"
             "<b>Distance:</b> {distance_label}<br/>"
-            "<b>Status:</b> {history_label}"
+            "<b>Status:</b> {history_label}<br/>"
+            "<b>Last heard:</b> {last_heard_label}"
         )
-        if band == "MW":
+        if band in {"MW", "FM"}:
             tooltip_html += (
                 "<br/><b>Format:</b> {format}<br/>"
-                "<b>Network / slogan:</b> {network_slogan}<br/>"
-                "<b>FM //s / notes:</b> {station_notes}"
+                + (
+                    "<b>Slogan:</b> {network_slogan}"
+                    if band == "FM"
+                    else "<b>Network / slogan:</b> {network_slogan}"
+                )
             )
+        if band == "MW":
+            tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}"
             st.caption(
                 "MW format, network/slogan, and FM parallel or identification notes "
                 "are provided courtesy of Tim Tromp."
             )
+        elif band == "FM":
+            st.caption("FM format and slogan information is provided by the WTFDA station data.")
         selected_theme = THEMES.get(
             str(preferences.get("theme_name", "Midnight blue")),
             THEMES["Midnight blue"],
@@ -420,42 +469,224 @@ if entry_mode in {"Station list", "Station map"}:
             if selected_theme["mode"] == "dark"
             else [30, 41, 59, 190]
         )
+        overlay_line_color = (
+            [203, 213, 225, 105]
+            if selected_theme["mode"] == "dark"
+            else [51, 65, 85, 105]
+        )
+        label_color = (
+            [248, 250, 252, 245]
+            if selected_theme["mode"] == "dark"
+            else [15, 23, 42, 245]
+        )
+        label_outline_color = (
+            [15, 23, 42, 255]
+            if selected_theme["mode"] == "dark"
+            else [248, 250, 252, 255]
+        )
+        with st.container(horizontal=True, vertical_alignment="bottom"):
+            overlay = st.selectbox(
+                "Map overlay",
+                [
+                    "Grayline now",
+                    "States / provinces heard",
+                    "4-character grids heard",
+                    "U.S. counties / parishes heard",
+                    "Countries heard",
+                    "None",
+                ],
+                key="station_map_overlay",
+                width=320,
+            )
+            show_call_labels = st.toggle(
+                "Show station call labels",
+                value=True,
+                key="station_map_show_call_labels",
+            )
+            if overlay == "Grayline now":
+                st.button(
+                    "Refresh grayline",
+                    icon=":material/refresh:",
+                    key="refresh_station_map_grayline",
+                )
+
+        band_history = existing[
+            existing["band"].fillna("").astype(str).str.upper() == band
+        ].copy() if not existing.empty else existing.copy()
+        map_layers: list[pdk.Layer] = []
+        if overlay == "Grayline now":
+            grayline_rows, grayline_time = grayline_cells()
+            map_layers.append(
+                pdk.Layer(
+                    "PolygonLayer",
+                    id="grayline-overlay",
+                    data=grayline_rows,
+                    get_polygon="polygon",
+                    get_fill_color="color",
+                    stroked=False,
+                    filled=True,
+                    pickable=False,
+                )
+            )
+            overlay_caption = (
+                f"Grayline calculated for {grayline_time:%Y-%m-%d %H:%M UTC}. "
+                "Pale gold is daylight, amber is the approximate ±6° twilight zone, and navy is darkness."
+            )
+        elif overlay == "States / provinces heard":
+            progress_geojson, heard_count = admin1_progress_geojson(band_history)
+            map_layers.append(
+                pdk.Layer(
+                    "GeoJsonLayer",
+                    id="admin1-progress",
+                    data=progress_geojson,
+                    get_fill_color="properties.fill_color",
+                    get_line_color=overlay_line_color,
+                    line_width_min_pixels=0.5,
+                    filled=True,
+                    stroked=True,
+                    pickable=False,
+                )
+            )
+            overlay_caption = (
+                f"{heard_count:,} U.S., Canadian, or Mexican state/province areas heard on {band}. "
+                "Cyan fill is heard; low-opacity fill is unheard."
+            )
+        elif overlay == "4-character grids heard":
+            heard_polygons, heard_count = heard_grid_polygons(band_history)
+            map_layers.extend(
+                [
+                    pdk.Layer(
+                        "PathLayer",
+                        id="grid-boundaries",
+                        data=list(maidenhead_grid_lines()),
+                        get_path="path",
+                        get_color=overlay_line_color,
+                        get_width=0.5,
+                        width_min_pixels=0.25,
+                        width_max_pixels=1,
+                        pickable=False,
+                    ),
+                    pdk.Layer(
+                        "PolygonLayer",
+                        id="heard-grids",
+                        data=heard_polygons,
+                        get_polygon="polygon",
+                        get_fill_color="color",
+                        get_line_color=overlay_line_color,
+                        line_width_min_pixels=0.5,
+                        filled=True,
+                        stroked=True,
+                        pickable=False,
+                    ),
+                ]
+            )
+            overlay_caption = (
+                f"{heard_count:,} unique 4-character grids heard on {band}. "
+                "All worldwide grid boundaries are shown; heard grids have a low-opacity cyan fill."
+            )
+        elif overlay == "U.S. counties / parishes heard":
+            progress_geojson, heard_count = county_progress_geojson(band_history)
+            map_layers.append(
+                pdk.Layer(
+                    "GeoJsonLayer",
+                    id="county-progress",
+                    data=progress_geojson,
+                    get_fill_color="properties.fill_color",
+                    get_line_color=overlay_line_color,
+                    line_width_min_pixels=0.25,
+                    filled=True,
+                    stroked=True,
+                    pickable=False,
+                )
+            )
+            overlay_caption = (
+                f"{heard_count:,} U.S. counties or parishes heard on {band}. "
+                "Cyan fill is heard; all other county boundaries remain visible."
+            )
+        elif overlay == "Countries heard":
+            progress_geojson, heard_count = country_progress_geojson(band_history)
+            map_layers.append(
+                pdk.Layer(
+                    "GeoJsonLayer",
+                    id="country-progress",
+                    data=progress_geojson,
+                    get_fill_color="properties.fill_color",
+                    get_line_color=overlay_line_color,
+                    line_width_min_pixels=0.5,
+                    filled=True,
+                    stroked=True,
+                    pickable=False,
+                )
+            )
+            overlay_caption = (
+                f"{heard_count:,} mapped countries or territories heard on {band}. "
+                "Cyan fill is heard; low-opacity fill is unheard."
+            )
+        else:
+            overlay_caption = "No progress or grayline overlay is selected."
+
+        map_layers.append(
+            pdk.Layer(
+                "GeoJsonLayer",
+                id="admin1-boundaries",
+                data=north_america_admin1_geojson(),
+                filled=False,
+                stroked=True,
+                get_line_color=boundary_color,
+                line_width_min_pixels=1,
+                line_width_max_pixels=2,
+                pickable=False,
+            )
+        )
+        map_layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                id="station-markers",
+                data=map_matches,
+                get_position="[longitude, latitude]",
+                get_fill_color="marker_color",
+                get_line_color=[15, 23, 42, 230],
+                get_radius=12_000,
+                radius_min_pixels=5,
+                radius_max_pixels=10,
+                line_width_min_pixels=1,
+                stroked=True,
+                filled=True,
+                pickable=True,
+                auto_highlight=True,
+            )
+        )
+        if show_call_labels:
+            map_layers.append(
+                pdk.Layer(
+                    "TextLayer",
+                    id="station-call-labels",
+                    data=map_matches,
+                    get_position="[longitude, latitude]",
+                    get_text="call_label",
+                    get_color=label_color,
+                    get_size=12,
+                    size_units="pixels",
+                    get_pixel_offset=[0, -10],
+                    get_alignment_baseline="'bottom'",
+                    outline_width=3,
+                    outline_color=label_outline_color,
+                    font_settings={"sdf": True},
+                    font_family="Arial Narrow, Arial, sans-serif",
+                    pickable=False,
+                )
+            )
         st.markdown(":orange-badge[New / unlogged] :blue-badge[Previously logged]")
         st.caption(
             "State and province borders are shown for the United States, Canada, and Mexico. "
+            + overlay_caption
+        )
+        st.caption(
             "Hover for station details; click a marker to open the same review form used by Station list."
         )
         map_event = st.pydeck_chart(
             pdk.Deck(
-                layers=[
-                    pdk.Layer(
-                        "GeoJsonLayer",
-                        id="admin1-boundaries",
-                        data=north_america_admin1_geojson(),
-                        filled=False,
-                        stroked=True,
-                        get_line_color=boundary_color,
-                        line_width_min_pixels=1,
-                        line_width_max_pixels=2,
-                        pickable=False,
-                    ),
-                    pdk.Layer(
-                        "ScatterplotLayer",
-                        id="station-markers",
-                        data=map_matches,
-                        get_position="[longitude, latitude]",
-                        get_fill_color="marker_color",
-                        get_line_color=[15, 23, 42, 230],
-                        get_radius=12_000,
-                        radius_min_pixels=5,
-                        radius_max_pixels=10,
-                        line_width_min_pixels=1,
-                        stroked=True,
-                        filled=True,
-                        pickable=True,
-                        auto_highlight=True,
-                    )
-                ],
+                layers=map_layers,
                 initial_view_state=map_view,
                 tooltip={"html": tooltip_html},
                 map_style=None,

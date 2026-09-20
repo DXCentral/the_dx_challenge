@@ -138,8 +138,8 @@ def load_stations() -> pd.DataFrame:
             "county": fm.get("County", ""),
             "latitude": fm["Decimal_Lat"],
             "longitude": fm["Decimal_Lon"],
-            "format": "",
-            "network_slogan": "",
+            "format": fm.get("Format", ""),
+            "network_slogan": fm.get("Slogan", ""),
             "station_notes": "",
         }
     )
