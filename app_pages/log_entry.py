@@ -22,6 +22,8 @@ from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_P
 from dxcore.presentation import convert_distance, distance_column_label, distance_is_km, format_distance
 from dxcore.solar import mw_propagation
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
+from dxcore.subdivisions import north_america_admin1_geojson
+from dxcore.themes import THEMES
 from modules.import_console import render_import_console
 
 
@@ -409,11 +411,34 @@ if entry_mode in {"Station list", "Station map"}:
                 "MW format, network/slogan, and FM parallel or identification notes "
                 "are provided courtesy of Tim Tromp."
             )
+        selected_theme = THEMES.get(
+            str(preferences.get("theme_name", "Midnight blue")),
+            THEMES["Midnight blue"],
+        )
+        boundary_color = (
+            [226, 232, 240, 190]
+            if selected_theme["mode"] == "dark"
+            else [30, 41, 59, 190]
+        )
         st.markdown(":orange-badge[New / unlogged] :blue-badge[Previously logged]")
-        st.caption("Hover for station details. Click a marker to open the same review form used by Station list.")
+        st.caption(
+            "State and province borders are shown for the United States, Canada, and Mexico. "
+            "Hover for station details; click a marker to open the same review form used by Station list."
+        )
         map_event = st.pydeck_chart(
             pdk.Deck(
                 layers=[
+                    pdk.Layer(
+                        "GeoJsonLayer",
+                        id="admin1-boundaries",
+                        data=north_america_admin1_geojson(),
+                        filled=False,
+                        stroked=True,
+                        get_line_color=boundary_color,
+                        line_width_min_pixels=1,
+                        line_width_max_pixels=2,
+                        pickable=False,
+                    ),
                     pdk.Layer(
                         "ScatterplotLayer",
                         id="station-markers",

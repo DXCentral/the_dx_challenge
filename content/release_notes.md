@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.12 · North American map boundaries
+
+- Added U.S. state, Canadian province/territory, and Mexican state borders to the interactive Station map on Log Entry.
+- Kept the boundary layer non-interactive so hover and click behavior remains reserved for station markers.
+- Adapted boundary contrast to the DXer's selected light or dark display theme while preserving the existing logged/unlogged marker colors.
+
 ### Version 1.0.0-rc10.11 · Interactive station map logging
 
 - Added a Station map entry method that plots every database station on the selected MW, FM, or NWR frequency, including U.S., Canadian, and international records.
