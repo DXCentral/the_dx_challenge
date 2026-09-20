@@ -40,7 +40,18 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
     frame["latitude"] = pd.to_numeric(frame["latitude"], errors="coerce")
     frame["longitude"] = pd.to_numeric(frame["longitude"], errors="coerce")
     frame = frame.dropna(subset=["frequency", "latitude", "longitude"])
-    for column in ["call", "city", "region", "country", "county"]:
+    for column in [
+        "call",
+        "city",
+        "region",
+        "country",
+        "county",
+        "format",
+        "network_slogan",
+        "station_notes",
+    ]:
+        if column not in frame:
+            frame[column] = ""
         frame[column] = frame[column].map(_text)
     frame["grid"] = [
         latlon_to_grid(lat, lon) for lat, lon in zip(frame["latitude"], frame["longitude"], strict=False)
@@ -70,6 +81,9 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
             "grid",
             "latitude",
             "longitude",
+            "format",
+            "network_slogan",
+            "station_notes",
         ]
     ].drop_duplicates("station_id")
 
@@ -88,6 +102,9 @@ def load_stations() -> pd.DataFrame:
             "county": mw.get("County", ""),
             "latitude": mw["LAT"],
             "longitude": mw["LON"],
+            "format": mw.get("Format", ""),
+            "network_slogan": mw.get("Network/Slogan", ""),
+            "station_notes": mw.get("Notes", ""),
         }
     )
 
@@ -103,6 +120,9 @@ def load_stations() -> pd.DataFrame:
             "county": "",
             "latitude": international["Station Lat"],
             "longitude": international["Station Long"],
+            "format": international.get("Format", ""),
+            "network_slogan": international.get("Network/Slogan", ""),
+            "station_notes": international.get("Notes", ""),
         }
     )
 
@@ -118,6 +138,9 @@ def load_stations() -> pd.DataFrame:
             "county": fm.get("County", ""),
             "latitude": fm["Decimal_Lat"],
             "longitude": fm["Decimal_Lon"],
+            "format": "",
+            "network_slogan": "",
+            "station_notes": "",
         }
     )
 
@@ -186,6 +209,9 @@ def load_stations() -> pd.DataFrame:
             "county": resolved_counties,
             "latitude": nwr["LAT"],
             "longitude": nwr["LON"],
+            "format": "",
+            "network_slogan": "",
+            "station_notes": "",
         }
     )
     return _finalize(pd.concat([mw_frame, international_frame, fm_frame, nwr_frame], ignore_index=True))
