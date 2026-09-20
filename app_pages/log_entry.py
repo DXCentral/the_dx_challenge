@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import html
 from datetime import datetime, time, timezone
 
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 from geopy.geocoders import Nominatim
 
@@ -80,7 +82,7 @@ if "log_band" not in st.session_state:
 band = st.segmented_control("Band", ["MW", "FM", "NWR"], **band_options)
 entry_mode = st.segmented_control(
     "Entry method",
-    ["Station list", "Manual entry", "Bulk import"],
+    ["Station list", "Station map", "Manual entry", "Bulk import"],
     default="Station list",
     key="log_entry_method",
 )
@@ -100,7 +102,7 @@ if active_sprints:
         + ". Use the optional station-list filter to focus on qualifying targets; normal logging remains fully open.",
         icon=":material/event_available:",
     )
-    if entry_mode == "Station list":
+    if entry_mode in {"Station list", "Station map"}:
         focused_challenge = (
             active_sprints[0]
             if len(active_sprints) == 1
@@ -179,9 +181,9 @@ with st.container(horizontal=True, vertical_alignment="bottom"):
     )
 
 selected: dict[str, object] | None = None
-source = "station_list"
+source = "station_map" if entry_mode == "Station map" else "station_list"
 
-if entry_mode == "Station list":
+if entry_mode in {"Station list", "Station map"}:
     nearby_only = st.toggle(
         "Limit station list to 322 km" if distance_is_km(preferences) else "Limit station list to 200 miles",
         value=False,
@@ -226,7 +228,7 @@ if entry_mode == "Station list":
         st.stop()
     matches = matches.copy()
     station_filter_version = int(st.session_state.get(f"station_filter_version_{band}", 0))
-    with st.popover("Filter station list", icon=":material/filter_alt:"):
+    with st.popover("Filter stations", icon=":material/filter_alt:"):
         filter_columns = st.columns(2)
         call_filter = filter_columns[0].text_input("Call sign / station name", key=f"station_call_{band}_{station_filter_version}")
         city_filter = filter_columns[1].text_input("City", key=f"station_city_{band}_{station_filter_version}")
@@ -261,81 +263,189 @@ if entry_mode == "Station list":
 
     result_count = len(matches)
     st.caption(f"{result_count:,} station(s) match the current frequency, distance, and search filters.")
-    table_matches = matches.head(1_000).copy()
-    if result_count > len(table_matches):
-        st.info(
-            f"Showing the nearest {len(table_matches):,} of {result_count:,} matches. "
-            "Use the station filters to narrow the full database by call, location, county, or grid."
-        )
+    if entry_mode == "Station list":
+        table_matches = matches.head(1_000).copy()
+        if result_count > len(table_matches):
+            st.info(
+                f"Showing the nearest {len(table_matches):,} of {result_count:,} matches. "
+                "Use the station filters to narrow the full database by call, location, county, or grid."
+            )
 
-    table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
-    distance_label = distance_column_label(preferences)
-    view_columns = ["frequency", "call", "city", "region", "country"]
-    if band == "MW":
-        view_columns.extend(["format", "network_slogan", "station_notes"])
-    view_columns.extend(["county", "grid", "logged"])
-    view = table_matches[view_columns].copy()
-    view[distance_label] = table_matches["distance_miles"].map(
-        lambda value: convert_distance(value, preferences)
-    )
-    ordered_columns = ["frequency", "call", "city", "region", "country"]
-    if band == "MW":
-        ordered_columns.extend(["format", "network_slogan", "station_notes"])
-    ordered_columns.extend(["county", "grid", distance_label, "logged"])
-    view = view[ordered_columns].rename(
-        columns={
-            "frequency": "Frequency",
-            "call": "Station",
-            "city": "City",
-            "region": "State / province",
-            "country": "Country",
-            "format": "Format",
-            "network_slogan": "Network / slogan",
-            "station_notes": "FM //s / notes",
-            "county": "County / parish",
-            "grid": "Grid",
-            "logged": "History",
-        }
-    )
-    if band == "MW":
-        st.caption(
-            "Format, network/slogan, and FM parallel or identification notes "
-            "are provided courtesy of Tim Tromp."
+        table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
+        distance_label = distance_column_label(preferences)
+        view_columns = ["frequency", "call", "city", "region", "country"]
+        if band == "MW":
+            view_columns.extend(["format", "network_slogan", "station_notes"])
+        view_columns.extend(["county", "grid", "logged"])
+        view = table_matches[view_columns].copy()
+        view[distance_label] = table_matches["distance_miles"].map(
+            lambda value: convert_distance(value, preferences)
         )
-    styled_view = view.style.apply(
-        lambda row: [
-            "background-color: #BFE8D0; color: #123B26; font-weight: 600"
-            if row["History"] == "Previously logged"
-            else ""
-        ] * len(row),
-        axis=1,
-    )
-    station_column_config = {
-        "Frequency": st.column_config.NumberColumn(
-            format="%.0f" if band == "MW" else ("%.1f" if band == "FM" else "%.3f")
-        ),
-        "Station": st.column_config.TextColumn(pinned=True),
-        distance_label: st.column_config.NumberColumn(format="%.1f"),
-    }
-    if band == "MW":
-        station_column_config.update(
-            {
-                "Format": st.column_config.TextColumn(width="medium"),
-                "Network / slogan": st.column_config.TextColumn(width="medium"),
-                "FM //s / notes": st.column_config.TextColumn(width="large"),
+        ordered_columns = ["frequency", "call", "city", "region", "country"]
+        if band == "MW":
+            ordered_columns.extend(["format", "network_slogan", "station_notes"])
+        ordered_columns.extend(["county", "grid", distance_label, "logged"])
+        view = view[ordered_columns].rename(
+            columns={
+                "frequency": "Frequency",
+                "call": "Station",
+                "city": "City",
+                "region": "State / province",
+                "country": "Country",
+                "format": "Format",
+                "network_slogan": "Network / slogan",
+                "station_notes": "FM //s / notes",
+                "county": "County / parish",
+                "grid": "Grid",
+                "logged": "History",
             }
         )
-    event = st.dataframe(
-        styled_view,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"log_station_table_{band}_{str(frequency).replace('.', '_')}",
-        column_config=station_column_config,
-        lazy=False,
-    )
-    if event.selection.rows:
-        selected = table_matches.iloc[event.selection.rows[0]].to_dict()
+        if band == "MW":
+            st.caption(
+                "Format, network/slogan, and FM parallel or identification notes "
+                "are provided courtesy of Tim Tromp."
+            )
+        styled_view = view.style.apply(
+            lambda row: [
+                "background-color: #BFE8D0; color: #123B26; font-weight: 600"
+                if row["History"] == "Previously logged"
+                else ""
+            ] * len(row),
+            axis=1,
+        )
+        station_column_config = {
+            "Frequency": st.column_config.NumberColumn(
+                format="%.0f" if band == "MW" else ("%.1f" if band == "FM" else "%.3f")
+            ),
+            "Station": st.column_config.TextColumn(pinned=True),
+            distance_label: st.column_config.NumberColumn(format="%.1f"),
+        }
+        if band == "MW":
+            station_column_config.update(
+                {
+                    "Format": st.column_config.TextColumn(width="medium"),
+                    "Network / slogan": st.column_config.TextColumn(width="medium"),
+                    "FM //s / notes": st.column_config.TextColumn(width="large"),
+                }
+            )
+        event = st.dataframe(
+            styled_view,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"log_station_table_{band}_{str(frequency).replace('.', '_')}",
+            column_config=station_column_config,
+            lazy=False,
+        )
+        if event.selection.rows:
+            selected = table_matches.iloc[event.selection.rows[0]].to_dict()
+    else:
+        map_matches = matches.copy()
+        map_matches["latitude"] = pd.to_numeric(map_matches["latitude"], errors="coerce")
+        map_matches["longitude"] = pd.to_numeric(map_matches["longitude"], errors="coerce")
+        valid_coordinates = (
+            map_matches["latitude"].between(-90, 90)
+            & map_matches["longitude"].between(-180, 180)
+        )
+        omitted_count = int((~valid_coordinates).sum())
+        map_matches = map_matches[valid_coordinates].reset_index(drop=True)
+        if map_matches.empty:
+            st.info("None of the matching stations have map coordinates. Use Station list or Manual entry instead.")
+            st.stop()
+        if omitted_count:
+            st.caption(
+                f"{omitted_count:,} matching station(s) without valid coordinates are omitted from the map "
+                "but remain available in Station list."
+            )
+
+        def map_text(value: object) -> str:
+            if pd.isna(value) or not str(value).strip():
+                return "—"
+            return html.escape(str(value).strip())
+
+        map_matches["history_label"] = map_matches["station_id"].isin(heard_ids).map(
+            {True: "Previously logged", False: "New / unlogged"}
+        )
+        map_matches["marker_color"] = map_matches["station_id"].isin(heard_ids).map(
+            {True: [0, 190, 230, 235], False: [255, 145, 0, 235]}
+        )
+        map_matches["frequency_label"] = map_matches["frequency"].map(
+            lambda value: format_frequency(band, float(value))
+        )
+        map_matches["distance_label"] = map_matches["distance_miles"].map(
+            lambda value: format_distance(float(value), preferences)
+        )
+        for column in [
+            "call",
+            "city",
+            "region",
+            "country",
+            "county",
+            "grid",
+            "format",
+            "network_slogan",
+            "station_notes",
+        ]:
+            map_matches[column] = map_matches[column].map(map_text)
+
+        points = map_matches[["longitude", "latitude"]].values.tolist()
+        map_view = pdk.data_utils.compute_view(points, view_proportion=1)
+        map_view.zoom = max(1.0, min(float(map_view.zoom), 7.0))
+        tooltip_html = (
+            "<b>{call}</b> · {frequency_label}<br/>"
+            "{city}, {region}, {country}<br/>"
+            "<b>County / parish:</b> {county}<br/>"
+            "<b>Grid:</b> {grid}<br/>"
+            "<b>Distance:</b> {distance_label}<br/>"
+            "<b>Status:</b> {history_label}"
+        )
+        if band == "MW":
+            tooltip_html += (
+                "<br/><b>Format:</b> {format}<br/>"
+                "<b>Network / slogan:</b> {network_slogan}<br/>"
+                "<b>FM //s / notes:</b> {station_notes}"
+            )
+            st.caption(
+                "MW format, network/slogan, and FM parallel or identification notes "
+                "are provided courtesy of Tim Tromp."
+            )
+        st.markdown(":orange-badge[New / unlogged] :blue-badge[Previously logged]")
+        st.caption("Hover for station details. Click a marker to open the same review form used by Station list.")
+        map_event = st.pydeck_chart(
+            pdk.Deck(
+                layers=[
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        id="station-markers",
+                        data=map_matches,
+                        get_position="[longitude, latitude]",
+                        get_fill_color="marker_color",
+                        get_line_color=[15, 23, 42, 230],
+                        get_radius=12_000,
+                        radius_min_pixels=5,
+                        radius_max_pixels=10,
+                        line_width_min_pixels=1,
+                        stroked=True,
+                        filled=True,
+                        pickable=True,
+                        auto_highlight=True,
+                    )
+                ],
+                initial_view_state=map_view,
+                tooltip={"html": tooltip_html},
+                map_style=None,
+            ),
+            height=560,
+            on_select="rerun",
+            selection_mode="single-object",
+            key=f"log_station_map_{band}_{str(frequency).replace('.', '_')}",
+        )
+        selected_objects = map_event.selection.objects.get("station-markers", [])
+        if selected_objects:
+            selected_id = str(selected_objects[0].get("station_id", ""))
+            selected_rows = matches[matches["station_id"].astype(str) == selected_id]
+            if not selected_rows.empty:
+                selected = selected_rows.iloc[0].to_dict()
 
 elif entry_mode == "Manual entry":
     source = "manual"
@@ -373,7 +483,11 @@ elif entry_mode == "Manual entry":
     selected = st.session_state.get("manual_station_pending")
 
 if selected is None:
-    st.caption("Select a station row to open the review form.")
+    st.caption(
+        "Select a station marker to open the review form."
+        if entry_mode == "Station map"
+        else "Select a station row to open the review form."
+    )
     st.stop()
 
 eligible_sprints = [
