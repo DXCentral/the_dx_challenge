@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.14.2 · Readable zoom-scaled station labels
+
+- Corrected TextLayer unit and font serialization so station call letters render as real text instead of a tiny dark line above each marker.
+- Increased the readable label range to 10–18 pixels and made the map-relative text grow earlier during zoom while retaining an upper cap to reduce overlap.
+- Reduced the call-label outline slightly for clearer letter shapes against both light and dark map themes.
+
 ### Version 1.0.0-rc10.14.1 · Station-map grayline hotfix
 
 - Corrected the smooth grayline raster's Deck.gl serialization so Streamlit sends its embedded image as a literal data URL instead of trying to parse `data:image` as a JavaScript expression.
