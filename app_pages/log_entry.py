@@ -270,22 +270,38 @@ if entry_mode == "Station list":
 
     table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
     distance_label = distance_column_label(preferences)
-    view = table_matches[["frequency", "call", "city", "region", "country", "county", "grid", "logged"]].copy()
+    view_columns = ["frequency", "call", "city", "region", "country"]
+    if band == "MW":
+        view_columns.extend(["format", "network_slogan", "station_notes"])
+    view_columns.extend(["county", "grid", "logged"])
+    view = table_matches[view_columns].copy()
     view[distance_label] = table_matches["distance_miles"].map(
         lambda value: convert_distance(value, preferences)
     )
-    view = view[["frequency", "call", "city", "region", "country", "county", "grid", distance_label, "logged"]].rename(
+    ordered_columns = ["frequency", "call", "city", "region", "country"]
+    if band == "MW":
+        ordered_columns.extend(["format", "network_slogan", "station_notes"])
+    ordered_columns.extend(["county", "grid", distance_label, "logged"])
+    view = view[ordered_columns].rename(
         columns={
             "frequency": "Frequency",
             "call": "Station",
             "city": "City",
             "region": "State / province",
             "country": "Country",
+            "format": "Format",
+            "network_slogan": "Network / slogan",
+            "station_notes": "FM //s / notes",
             "county": "County / parish",
             "grid": "Grid",
             "logged": "History",
         }
     )
+    if band == "MW":
+        st.caption(
+            "Format, network/slogan, and FM parallel or identification notes "
+            "are provided courtesy of Tim Tromp."
+        )
     styled_view = view.style.apply(
         lambda row: [
             "background-color: #BFE8D0; color: #123B26; font-weight: 600"
@@ -294,16 +310,28 @@ if entry_mode == "Station list":
         ] * len(row),
         axis=1,
     )
+    station_column_config = {
+        "Frequency": st.column_config.NumberColumn(
+            format="%.0f" if band == "MW" else ("%.1f" if band == "FM" else "%.3f")
+        ),
+        "Station": st.column_config.TextColumn(pinned=True),
+        distance_label: st.column_config.NumberColumn(format="%.1f"),
+    }
+    if band == "MW":
+        station_column_config.update(
+            {
+                "Format": st.column_config.TextColumn(width="medium"),
+                "Network / slogan": st.column_config.TextColumn(width="medium"),
+                "FM //s / notes": st.column_config.TextColumn(width="large"),
+            }
+        )
     event = st.dataframe(
         styled_view,
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
         key=f"log_station_table_{band}_{str(frequency).replace('.', '_')}",
-        column_config={
-            "Frequency": st.column_config.NumberColumn(format="%.3f"),
-            distance_label: st.column_config.NumberColumn(format="%.1f"),
-        },
+        column_config=station_column_config,
         lazy=False,
     )
     if event.selection.rows:

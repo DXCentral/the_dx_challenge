@@ -1,3 +1,22 @@
+### Version 1.0.0-rc10.10 · MW station coverage reconciliation
+
+- Added 48 active Canadian MW calls that were missing from the managed station list, using transmitter coordinates returned by AM DXer's station-detail lookup.
+- Corrected the current frequencies and transmitter records for CHED, CKNW, and CHIN, and removed the deleted CHQT service from the selectable station list.
+- Added the independently verified current U.S. omissions KCIK 740 and WSAT 1280, including transmitter county and FIPS data for filters, awards, and maps.
+- Kept cancelled or defunct source-only U.S. facilities out of the active 2026 station selector rather than reintroducing stale records.
+
+### Version 1.0.0-rc10.9 · MW identification details
+
+- Enriched the existing U.S. and Canadian MW station records with format, network/slogan, FM parallel, former-call, relay, and other identification notes provided by Tim Tromp.
+- Added Format, Network / slogan, and FM //s / notes columns to the MW station list on Log Entry, with the station call pinned while DXers scroll through the added details.
+- Used strict frequency/call matching plus two verified call-history aliases; unmatched existing stations remain available with blank identification fields rather than receiving uncertain metadata.
+
+### Version 1.0.0-rc10.8 · 92.9 MHz station database correction
+
+- Rebuilt the complete 92.9 MHz section from the current WTFDA export, restoring 66 legitimate stations that had been displaced by duplicate records during the earlier enrichment process.
+- Converted all WTFDA latitude and longitude values from degree-minute-second notation to signed decimal coordinates for station searches, distance calculations, path maps, and station-location maps.
+- Restored unique station IDs across all 317 records and populated county data for every U.S. 92.9 MHz transmitter location.
+
 ### Version 1.0.0-rc10.7 · Recording timestamp memory
 
 - Made both the UTC date and UTC time remain in place after a successful From recording submission, speeding up entry of multiple stations heard in the same recording.
