@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.11 · Interactive station map logging
+
+- Added a Station map entry method that plots every database station on the selected MW, FM, or NWR frequency, including U.S., Canadian, and international records.
+- Added accessible orange and cyan marker states for new and previously logged stations, with full station-list details available on hover.
+- Made a station-marker click open the existing Live DX / From recording review form, preserving the same validation, sticky settings, duplicate protection, and final confirmation used by Station list.
+
 ### Version 1.0.0-rc10.10 · MW station coverage reconciliation
 
 - Added 48 active Canadian MW calls that were missing from the managed station list, using transmitter coordinates returned by AM DXer's station-detail lookup.
