@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.14.3 · Wide-view station-label legibility
+
+- Raised the minimum station-call label size from 10 to 12 pixels and the maximum from 18 to 20 pixels for better wide-view readability.
+- Increased the map-relative label scale so calls begin growing sooner during zoom and added a medium-bold weight for clearer letter shapes.
+- Preserved the band-specific label toggle and FM's default-off behavior to keep dense FM maps manageable.
+
 ### Version 1.0.0-rc10.14.2 · Readable zoom-scaled station labels
 
 - Corrected TextLayer unit and font serialization so station call letters render as real text instead of a tiny dark line above each marker.
