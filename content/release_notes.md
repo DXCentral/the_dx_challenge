@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.15 · Full-screen station-map workspace
+
+- Added an optional Station map workspace with the interactive map on the left and band, frequency, challenge, search, overlay, label, and reception-review controls together in a right-side panel.
+- Added a browser full-screen control for the complete workspace, so DXers can change bands or frequencies and submit a reviewed log without leaving the expanded map experience.
+- Preserved the current map zoom and pan position when changing frequencies instead of remounting and returning the map to its initial wide view.
+
 ### Version 1.0.0-rc10.14.3 · Wide-view station-label legibility
 
 - Raised the minimum station-call label size from 10 to 12 pixels and the maximum from 18 to 20 pixels for better wide-view readability.
