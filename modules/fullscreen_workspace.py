@@ -74,6 +74,7 @@ html.${activeClass} ${targetSelector} {
 }
 html.${activeClass} [data-baseweb="popover"],
 html.${activeClass} [data-baseweb="menu"],
+html.${activeClass} [data-testid="stSelectboxVirtualDropdown"],
 html.${activeClass} [role="listbox"] {
   z-index: 2147483600 !important;
 }

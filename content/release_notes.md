@@ -1,3 +1,8 @@
+### Version 1.0.0-rc10.15.2 · Visible full-screen frequency menu
+
+- Raised Streamlit's actual selectbox portal container above the full-screen Station map workspace, correcting the frequency menu that could open structurally while remaining visually hidden behind the map.
+- Added regression coverage for Streamlit's exact selectbox portal layer in addition to the existing interaction and accessibility checks.
+
 ### Version 1.0.0-rc10.15.1 · Full-screen frequency-menu hotfix
 
 - Corrected the Station map workspace's browser-fullscreen layering so Streamlit frequency, band, overlay, and other pop-up menus remain visible and clickable while the workspace is expanded.
