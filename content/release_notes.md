@@ -1,3 +1,8 @@
+### Version 1.0.0-rc10.15.1 · Full-screen frequency-menu hotfix
+
+- Corrected the Station map workspace's browser-fullscreen layering so Streamlit frequency, band, overlay, and other pop-up menus remain visible and clickable while the workspace is expanded.
+- Kept the focused map-and-controls presentation by isolating the workspace visually while allowing Streamlit's menu portal layer to render above it.
+
 ### Version 1.0.0-rc10.15 · Full-screen station-map workspace
 
 - Added an optional Station map workspace with the interactive map on the left and band, frequency, challenge, search, overlay, label, and reception-review controls together in a right-side panel.
