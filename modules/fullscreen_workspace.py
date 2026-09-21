@@ -34,42 +34,79 @@ export default function (component) {
   const { data, parentElement } = component
   const button = parentElement.querySelector("#fullscreen-toggle")
   const componentHost = parentElement.host ?? parentElement
-  const target = componentHost.closest(`.${data.targetClass}`)
+  const targetSelector = `.${CSS.escape(data.targetClass)}`
+  const target = componentHost.closest(targetSelector)
   if (!button || !target) return
 
-  const previous = {
-    background: target.style.background,
-    boxSizing: target.style.boxSizing,
-    height: target.style.height,
-    overflow: target.style.overflow,
-    padding: target.style.padding,
-    width: target.style.width,
+  const fullscreenRoot = document.body
+  const activeClass = "dx-map-workspace-fullscreen-active"
+  const styleId = "dx-map-workspace-fullscreen-style"
+
+  const installFullscreenStyles = () => {
+    let style = document.getElementById(styleId)
+    if (!style) {
+      style = document.createElement("style")
+      style.id = styleId
+      document.head.appendChild(style)
+    }
+    style.textContent = `
+html.${activeClass},
+html.${activeClass} body {
+  background: var(--st-background-color, #0e1117) !important;
+  height: 100% !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  width: 100% !important;
+}
+html.${activeClass} ${targetSelector} {
+  background: var(--st-background-color, #0e1117) !important;
+  border: 0 !important;
+  box-sizing: border-box !important;
+  height: 100vh !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  max-width: none !important;
+  overflow: auto !important;
+  padding: 1rem !important;
+  position: fixed !important;
+  width: 100vw !important;
+  z-index: 2147483000 !important;
+}
+html.${activeClass} [data-baseweb="popover"],
+html.${activeClass} [data-baseweb="menu"],
+html.${activeClass} [role="listbox"] {
+  z-index: 2147483600 !important;
+}
+`
+    document.documentElement.classList.add(activeClass)
+  }
+
+  const removeFullscreenStyles = () => {
+    document.documentElement.classList.remove(activeClass)
+    document.getElementById(styleId)?.remove()
   }
 
   const update = () => {
-    const active = document.fullscreenElement === target
+    const active = document.fullscreenElement === fullscreenRoot
     button.textContent = active ? "Exit full screen" : "Open full screen"
     button.setAttribute("aria-pressed", active ? "true" : "false")
     if (active) {
-      target.style.background = "var(--st-background-color, #0e1117)"
-      target.style.boxSizing = "border-box"
-      target.style.height = "100vh"
-      target.style.overflow = "auto"
-      target.style.padding = "1rem"
-      target.style.width = "100vw"
+      installFullscreenStyles()
     } else {
-      Object.assign(target.style, previous)
+      removeFullscreenStyles()
     }
   }
 
   button.onclick = async () => {
     try {
-      if (document.fullscreenElement === target) {
+      if (document.fullscreenElement === fullscreenRoot) {
         await document.exitFullscreen()
       } else {
-        await target.requestFullscreen()
+        installFullscreenStyles()
+        await fullscreenRoot.requestFullscreen()
       }
     } catch (error) {
+      removeFullscreenStyles()
       button.textContent = "Full screen unavailable"
       button.title = String(error)
     }
