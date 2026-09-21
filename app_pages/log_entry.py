@@ -39,6 +39,7 @@ from dxcore.station_map import (
 from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
 from dxcore.subdivisions import north_america_admin1_geojson
 from dxcore.themes import THEMES
+from modules.fullscreen_workspace import render_fullscreen_control
 from modules.import_console import render_import_console
 
 
@@ -85,24 +86,72 @@ def clear_station_filters(band: str) -> None:
     st.session_state[version_key] = int(st.session_state.get(version_key, 0)) + 1
 
 
-st.title("Log entry")
-st.caption("Select a station, review the complete reception, then submit. Nothing is logged by a row click alone.")
+def open_map_workspace() -> None:
+    st.session_state["station_map_workspace_active"] = True
+    st.session_state["log_entry_method"] = "Station map"
+
+
+def close_map_workspace() -> None:
+    st.session_state["station_map_workspace_active"] = False
+
+
+workspace_active = bool(st.session_state.get("station_map_workspace_active", False))
+st.title("Station map workspace" if workspace_active else "Log entry")
+st.caption(
+    "Tune, explore, select a station, and review the reception without leaving the map."
+    if workspace_active
+    else "Select a station, review the complete reception, then submit. Nothing is logged by a row click alone."
+)
 
 location = require_location()
 store = get_store()
 user_id = st.session_state.user["user_id"]
 preferences = st.session_state.user
 
+workspace_map = None
+workspace_panel = None
+controls = st
+if workspace_active:
+    workspace_shell_key = "station-map-workspace-shell"
+    workspace_shell = st.container(key=workspace_shell_key, border=True)
+    with workspace_shell:
+        workspace_map, workspace_panel = st.columns(
+            [3.7, 1.3], gap="small", wrap=False
+        )
+    controls = workspace_panel
+    controls.subheader("Map controls")
+    with controls:
+        render_fullscreen_control(
+            target_key=workspace_shell_key,
+            key="station_map_workspace_fullscreen",
+        )
+    controls.button(
+        "Exit map workspace",
+        icon=":material/close_fullscreen:",
+        on_click=close_map_workspace,
+        width="stretch",
+    )
+
 band_options = {"key": "log_band", "persist_state": "session"}
 if "log_band" not in st.session_state:
     band_options["default"] = "FM"
-band = st.segmented_control("Band", ["MW", "FM", "NWR"], **band_options)
-entry_mode = st.segmented_control(
-    "Entry method",
-    ["Station list", "Station map", "Manual entry", "Bulk import"],
-    default="Station list",
-    key="log_entry_method",
-)
+band = controls.segmented_control("Band", ["MW", "FM", "NWR"], **band_options)
+if workspace_active:
+    entry_mode = "Station map"
+    controls.caption("Marker clicks open the review form in this panel.")
+else:
+    entry_mode = st.segmented_control(
+        "Entry method",
+        ["Station list", "Station map", "Manual entry", "Bulk import"],
+        default="Station list",
+        key="log_entry_method",
+    )
+    if entry_mode == "Station map":
+        st.button(
+            "Open map workspace",
+            icon=":material/open_in_full:",
+            on_click=open_map_workspace,
+        )
 
 if entry_mode == "Bulk import":
     render_import_console(location)
@@ -113,7 +162,7 @@ frequencies = band_frequencies(band)
 challenge_filter = False
 focused_challenge: dict[str, object] | None = None
 if active_sprints:
-    st.info(
+    controls.info(
         "Active challenge: "
         + ", ".join(str(challenge["name"]) for challenge in active_sprints)
         + ". Use the optional station-list filter to focus on qualifying targets; normal logging remains fully open.",
@@ -123,14 +172,14 @@ if active_sprints:
         focused_challenge = (
             active_sprints[0]
             if len(active_sprints) == 1
-            else st.selectbox(
+            else controls.selectbox(
                 "Active challenge target",
                 active_sprints,
                 format_func=lambda challenge: challenge["name"],
                 key=f"log_active_challenge_{band}",
             )
         )
-        challenge_filter = st.toggle(
+        challenge_filter = controls.toggle(
             "Active challenge filter",
             value=False,
             key=f"log_challenge_only_{band}",
@@ -159,7 +208,7 @@ else:
         st.session_state[frequency_key] = frequencies[0]
 
 if challenge_filter and not challenge_frequencies:
-    st.warning(
+    controls.warning(
         "The active challenge does not contain a valid frequency for this band. "
         "The full frequency list remains available so normal logging is not blocked."
     )
@@ -179,7 +228,7 @@ def move_channel(direction: int) -> None:
             band, float(current), direction, restricted_channels
         )
 
-with st.container(horizontal=True, vertical_alignment="bottom"):
+with controls.container(horizontal=True, vertical_alignment="bottom"):
     st.button(
         "Previous", icon=":material/skip_previous:", on_click=move_channel, args=(-1,),
         disabled=st.session_state[frequency_key] == "All",
@@ -201,7 +250,7 @@ selected: dict[str, object] | None = None
 source = "station_map" if entry_mode == "Station map" else "station_list"
 
 if entry_mode in {"Station list", "Station map"}:
-    nearby_only = st.toggle(
+    nearby_only = controls.toggle(
         "Limit station list to 322 km" if distance_is_km(preferences) else "Limit station list to 200 miles",
         value=False,
         key=f"log_nearby_only_{band}",
@@ -241,11 +290,11 @@ if entry_mode in {"Station list", "Station map"}:
         message = "No stations match this frequency and distance range."
         if challenge_filter:
             message = "No listed stations on this frequency meet the active challenge filter. Turn it off to restore the full list."
-        st.info(message + " You can also use Manual entry.")
+        controls.info(message + " You can also use Manual entry.")
         st.stop()
     matches = matches.copy()
     station_filter_version = int(st.session_state.get(f"station_filter_version_{band}", 0))
-    with st.popover("Filter stations", icon=":material/filter_alt:"):
+    with controls.popover("Filter stations", icon=":material/filter_alt:"):
         filter_columns = st.columns(2)
         call_filter = filter_columns[0].text_input("Call sign / station name", key=f"station_call_{band}_{station_filter_version}")
         city_filter = filter_columns[1].text_input("City", key=f"station_city_{band}_{station_filter_version}")
@@ -275,11 +324,11 @@ if entry_mode in {"Station list", "Station map"}:
             matches = matches[matches[column].str.contains(query.strip(), case=False, na=False, regex=False)]
     matches = matches.reset_index(drop=True)
     if matches.empty:
-        st.info("No stations match the current filters.")
+        controls.info("No stations match the current filters.")
         st.stop()
 
     result_count = len(matches)
-    st.caption(f"{result_count:,} station(s) match the current frequency, distance, and search filters.")
+    controls.caption(f"{result_count:,} station(s) match the current frequency, distance, and search filters.")
     if entry_mode == "Station list":
         table_matches = matches.head(1_000).copy()
         if result_count > len(table_matches):
@@ -375,10 +424,10 @@ if entry_mode in {"Station list", "Station map"}:
         omitted_count = int((~valid_coordinates).sum())
         map_matches = map_matches[valid_coordinates].reset_index(drop=True)
         if map_matches.empty:
-            st.info("None of the matching stations have map coordinates. Use Station list or Manual entry instead.")
+            controls.info("None of the matching stations have map coordinates. Use Station list or Manual entry instead.")
             st.stop()
         if omitted_count:
-            st.caption(
+            controls.caption(
                 f"{omitted_count:,} matching station(s) without valid coordinates are omitted from the map "
                 "but remain available in Station list."
             )
@@ -433,8 +482,20 @@ if entry_mode in {"Station list", "Station map"}:
             map_matches[column] = map_matches[column].map(map_text)
 
         points = map_matches[["longitude", "latitude"]].values.tolist()
-        map_view = pdk.data_utils.compute_view(points, view_proportion=1)
-        map_view.zoom = max(1.0, min(float(map_view.zoom), 7.0))
+        map_context = "workspace" if workspace_active else "standard"
+        initial_view_key = (
+            f"station_map_initial_view_{map_context}_{location['location_id']}_{band}"
+        )
+        if initial_view_key not in st.session_state:
+            computed_view = pdk.data_utils.compute_view(points, view_proportion=1)
+            st.session_state[initial_view_key] = {
+                "longitude": float(computed_view.longitude),
+                "latitude": float(computed_view.latitude),
+                "zoom": max(1.0, min(float(computed_view.zoom), 7.0)),
+                "pitch": 0,
+                "bearing": 0,
+            }
+        map_view = pdk.ViewState(**st.session_state[initial_view_key])
         tooltip_html = (
             "<b>{call}</b> · {frequency_label}<br/>"
             "{city}, {region}, {country}<br/>"
@@ -455,12 +516,12 @@ if entry_mode in {"Station list", "Station map"}:
             )
         if band == "MW":
             tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}"
-            st.caption(
+            controls.caption(
                 "MW format, network/slogan, and FM parallel or identification notes "
                 "are provided courtesy of Tim Tromp."
             )
         elif band == "FM":
-            st.caption("FM format and slogan information is provided by the WTFDA station data.")
+            controls.caption("FM format and slogan information is provided by the WTFDA station data.")
         selected_theme = THEMES.get(
             str(preferences.get("theme_name", "Midnight blue")),
             THEMES["Midnight blue"],
@@ -485,7 +546,7 @@ if entry_mode in {"Station list", "Station map"}:
             if selected_theme["mode"] == "dark"
             else [248, 250, 252, 255]
         )
-        with st.container(horizontal=True, vertical_alignment="bottom"):
+        with controls.container(horizontal=True, vertical_alignment="bottom"):
             overlay = st.selectbox(
                 "Map overlay",
                 [
@@ -697,25 +758,26 @@ if entry_mode in {"Station list", "Station map"}:
                     pickable=False,
                 )
             )
-        st.markdown(":orange-badge[New / unlogged] :blue-badge[Previously logged]")
-        st.caption(
+        map_target = workspace_map if workspace_active else st
+        map_target.markdown(":orange-badge[New / unlogged] :blue-badge[Previously logged]")
+        map_target.caption(
             "State and province borders are shown for the United States, Canada, and Mexico. "
             + overlay_caption
         )
-        st.caption(
+        map_target.caption(
             "Hover for station details; click a marker to open the same review form used by Station list."
         )
-        map_event = st.pydeck_chart(
+        map_event = map_target.pydeck_chart(
             pdk.Deck(
                 layers=map_layers,
                 initial_view_state=map_view,
                 tooltip={"html": tooltip_html},
                 map_style=None,
             ),
-            height=560,
+            height=720 if workspace_active else 560,
             on_select="rerun",
             selection_mode="single-object",
-            key=f"log_station_map_{band}_{str(frequency).replace('.', '_')}",
+            key=f"log_station_map_{map_context}_{band}",
         )
         selected_objects = map_event.selection.objects.get("station-markers", [])
         if selected_objects:
@@ -759,8 +821,9 @@ elif entry_mode == "Manual entry":
             st.session_state.manual_station_pending = selected
     selected = st.session_state.get("manual_station_pending")
 
+review_target = workspace_panel if workspace_active else st
 if selected is None:
-    st.caption(
+    review_target.caption(
         "Select a station marker to open the review form."
         if entry_mode == "Station map"
         else "Select a station row to open the review form."
@@ -773,7 +836,7 @@ eligible_sprints = [
     if station_qualifies_for_challenge(selected, challenge)
 ]
 
-with st.container(border=True):
+with review_target.container(border=True):
     st.subheader("Review reception")
     st.markdown(
         f"**{selected['call']}** · {format_frequency(band, float(selected['frequency']))} · "
