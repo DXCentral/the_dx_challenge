@@ -13,6 +13,7 @@ from app_support import display_names, get_store, season_eligible_logs, season_m
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.metrics import add_geography_keys, normalize_county, valid_station_coordinates
 from dxcore.presentation import display_log_table
+from dxcore.station_map import country_choropleth_counts
 from dxcore.subdivisions import subdivision_counts, subdivision_figure
 from dxcore.themes import THEMES
 
@@ -374,16 +375,17 @@ elif map_view == "Logs by country":
         .rename(columns={"station_country": "country"})
         .sort_values("Unique stations", ascending=False)
     )
+    map_counts = country_choropleth_counts(unique_logs, "Unique stations")
     table_col, map_col = st.columns([1, 2])
     with table_col:
         st.dataframe(counts, hide_index=True, height=500)
     with map_col:
         fig = go.Figure(
             go.Choropleth(
-                locations=counts["country"],
-                locationmode="country names",
-                z=counts["Unique stations"],
-                text=counts["country"],
+                locations=map_counts["country_code"],
+                locationmode="ISO-3",
+                z=map_counts["Unique stations"],
+                text=map_counts["country"],
                 colorscale=[
                     [0.0, "#174A6B"],
                     [0.5, "#168CC4"],
@@ -426,9 +428,12 @@ elif map_view == "Logs by country":
                 "toImageButtonOptions": {"format": "jpeg", "filename": "dx-challenge-logs-by-country"},
             },
         )
-        if picked := plotly_point(event, "location"):
-            if picked in countries and picked != country_choice:
-                st.session_state.stats_pending_country = picked
+        if picked_code := plotly_point(event, "location"):
+            country_filter = dict(
+                zip(map_counts["country_code"], map_counts["filter_country"], strict=False)
+            ).get(picked_code, "")
+            if country_filter in countries and country_filter != country_choice:
+                st.session_state.stats_pending_country = country_filter
                 st.rerun()
 elif map_view == "Logs by grid square":
     counts = (

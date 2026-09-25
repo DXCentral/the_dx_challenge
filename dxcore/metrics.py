@@ -34,6 +34,18 @@ def add_geography_keys(frame: pd.DataFrame) -> pd.DataFrame:
         f"{band}|{country}|{region}" if region else ""
         for band, country, region in zip(bands, countries, regions, strict=False)
     ]
+    result["country_band_key"] = [
+        f"{band}|{country}" if country else ""
+        for band, country in zip(bands, countries, strict=False)
+    ]
+    result["grid_band_key"] = [
+        f"{band}|{grid}" if grid else ""
+        for band, grid in zip(bands, result["grid4"], strict=False)
+    ]
+    result["county_band_key"] = [
+        f"{band}|{county}" if county else ""
+        for band, county in zip(bands, result["county_key"], strict=False)
+    ]
     return result
 
 
@@ -97,9 +109,9 @@ def challenge_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
         # to the prior behavior for a single-band challenge while encouraging
         # MW, FM, and NWR activity in multi-band sprints.
         "Unique states/provinces": "region_band_key",
-        "Unique countries": "station_country",
-        "Unique 4-character grids": "grid4",
-        "Unique counties/parishes": "county_key",
+        "Unique countries": "country_band_key",
+        "Unique 4-character grids": "grid_band_key",
+        "Unique counties/parishes": "county_band_key",
     }
     if scoring_method == "Total receptions":
         return rows.groupby("user_id").size().reset_index(name="score").sort_values("score", ascending=False)

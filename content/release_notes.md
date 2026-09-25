@@ -1,3 +1,15 @@
+### Version 1.0.0-rc10.16.4 · United Kingdom country-map normalization
+
+- Normalized England, Scotland, Wales, Northern Ireland, Great Britain, and UK variants to the United Kingdom's stable GBR country code.
+- Updated Stats and Challenge country choropleths to use ISO-3 locations and combine equivalent stored country labels into one United Kingdom result.
+- Preserved the original stored country text for tables and click-to-filter behavior, so historical logs require no edits or re-imports.
+
+### Version 1.0.0-rc10.16.3 · Band-aware geography sprint scoring
+
+- Extended multi-band sprint scoring so countries, 4-character grids, and counties/parishes follow the same once-per-band rule as states and provinces.
+- Updated geography counters, DXer result tables, Canadian and Mexican subdivision views, worldwide country maps, grid maps, and county maps to display band-aware challenge points consistently.
+- Kept single-band sprint totals unchanged and left season-long marathon awards scoped to their existing individual bands.
+
 ### Version 1.0.0-rc10.16.2 · Multi-band state challenge scoring
 
 - Made Unique states/provinces challenge scoring band-aware: the same state or province can score once each on MW, FM, and NWR for every DXer.

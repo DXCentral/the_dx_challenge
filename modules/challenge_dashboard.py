@@ -21,6 +21,7 @@ from dxcore.metrics import (
     valid_station_coordinates,
 )
 from dxcore.presentation import display_log_table
+from dxcore.station_map import country_choropleth_counts
 from dxcore.subdivisions import (
     add_subdivision_keys,
     subdivision_counts,
@@ -347,15 +348,22 @@ def render_challenge_dashboard(
         st.metric("Unique stations", f"{unique_logs['station_id'].nunique():,}", border=True)
         st.metric("DXers", f"{unique_logs['user_id'].nunique():,}", border=True)
         st.metric("States / provinces by band", f"{unique_logs['region_band_key'].replace('', pd.NA).nunique():,}", border=True)
-        st.metric("Countries", f"{unique_logs['station_country'].replace('', pd.NA).nunique():,}", border=True)
-        st.metric("4-character grids", f"{unique_logs['grid4'].replace('', pd.NA).nunique():,}", border=True)
-        st.metric("Counties / parishes", f"{unique_logs['county_key'].replace('', pd.NA).nunique():,}", border=True)
+        st.metric("Countries by band", f"{unique_logs['country_band_key'].replace('', pd.NA).nunique():,}", border=True)
+        st.metric("4-character grids by band", f"{unique_logs['grid_band_key'].replace('', pd.NA).nunique():,}", border=True)
+        st.metric("Counties / parishes by band", f"{unique_logs['county_band_key'].replace('', pd.NA).nunique():,}", border=True)
 
-    if scoring_method == "Unique states/provinces":
+    geography_scoring = {
+        "Unique states/provinces": ("state/province", "Louisiana"),
+        "Unique countries": ("country", "Canada"),
+        "Unique 4-character grids": ("4-character grid", "EM40"),
+        "Unique counties/parishes": ("county/parish", "Orleans Parish"),
+    }
+    if scoring_method in geography_scoring:
+        unit, example = geography_scoring[scoring_method]
         st.info(
-            "This is a band-aware state/province challenge: each state or province "
-            "can score once on MW, once on FM, and once on NWR for each DXer. "
-            "For example, Louisiana heard on all three bands is worth 3 points.",
+            f"This is a band-aware {unit} challenge: each {unit} can score once "
+            "on MW, once on FM, and once on NWR for each DXer. "
+            f"For example, {example} heard on all three bands is worth 3 points.",
             icon=":material/radio:",
         )
 
@@ -379,9 +387,9 @@ def render_challenge_dashboard(
         scoring_labels = {
             "Unique stations": "Unique stations",
             "Unique states/provinces": "Unique states / provinces by band",
-            "Unique countries": "Unique countries",
-            "Unique 4-character grids": "Unique 4-character grids",
-            "Unique counties/parishes": "Unique counties / parishes",
+            "Unique countries": "Unique countries by band",
+            "Unique 4-character grids": "Unique 4-character grids by band",
+            "Unique counties/parishes": "Unique counties / parishes by band",
             "Total receptions": "Total receptions",
         }
         _dxer_table(
@@ -438,23 +446,30 @@ def render_challenge_dashboard(
     elif analysis in {"Logs by Canadian province", "Logs by Mexican state"}:
         country_code = "CAN" if analysis == "Logs by Canadian province" else "MEX"
         country_rows = add_subdivision_keys(unique_logs, country_code)
+        country_rows["admin1_band_key"] = (
+            country_rows["band"].fillna("").astype(str).str.upper()
+            + "|"
+            + country_rows["admin1_code"].fillna("").astype(str)
+        )
         _dxer_table(
             country_rows,
             name_lookup,
-            field="admin1_code",
+            field="admin1_band_key",
             label=(
-                "Unique Canadian provinces / territories"
+                "Unique Canadian provinces / territories by band"
                 if country_code == "CAN"
-                else "Unique Mexican states"
+                else "Unique Mexican states by band"
             ),
             prefix=prefix,
             current_dxer=dxer_choice,
         )
-        counts = subdivision_counts(unique_logs, country_code, "Unique logs")
+        counts = subdivision_counts(
+            unique_logs, country_code, "Bands heard", unique_by="band"
+        )
         fig = subdivision_figure(
             counts,
             country_code,
-            "Unique logs",
+            "Bands heard",
             background=background,
             surface=surface,
             text_color=text_color,
@@ -475,19 +490,21 @@ def render_challenge_dashboard(
         )
     elif analysis == "Countries heard by DXer":
         _dxer_table(
-            unique_logs, name_lookup, field="station_country", label="Unique countries",
+            unique_logs, name_lookup, field="country_band_key", label="Unique countries by band",
             prefix=prefix, current_dxer=dxer_choice,
         )
-        counts = unique_logs[unique_logs["station_country"] != ""].groupby("station_country").size().reset_index(name="Unique logs").rename(columns={"station_country": "country"})
+        counts = country_choropleth_counts(
+            unique_logs, "Bands heard", unique_by="band"
+        )
         if go is None:
             st.info("The interactive country map will appear after the app dependencies finish installing.")
             st.dataframe(counts, hide_index=True)
             return
         fig = go.Figure(go.Choropleth(
-            locations=counts["country"], locationmode="country names", z=counts["Unique logs"],
+            locations=counts["country_code"], locationmode="ISO-3", z=counts["Bands heard"],
             text=counts["country"], colorscale=[[0.0, "#174A6B"], [0.5, "#168CC4"], [1.0, "#7DE3FF"]],
             marker_line_color=palette["border"], marker_line_width=0.5,
-            colorbar_title="Unique logs", hovertemplate="%{text}<br>%{z:,} unique logs<extra></extra>",
+            colorbar_title="Bands heard", hovertemplate="%{text}<br>%{z:,} bands heard<extra></extra>",
         ))
         fig.update_layout(
             template="plotly_white" if str(st.session_state.user.get("theme_name")) == "Daylight blue" else "plotly_dark",
@@ -499,29 +516,40 @@ def render_challenge_dashboard(
             fig, key=f"{prefix}_country_map_{selection_version}", on_select="rerun", selection_mode="points",
             config={"scrollZoom": True, "displaylogo": False, "toImageButtonOptions": {"format": "jpeg", "filename": f"{prefix}-countries"}},
         )
-        if picked := _plotly_point(event, "location"):
-            if picked in choices["countries"] and picked != choices["country_choice"]:
-                st.session_state[f"{prefix}_pending_country"] = picked
+        if picked_code := _plotly_point(event, "location"):
+            country_filter = dict(
+                zip(counts["country_code"], counts["filter_country"], strict=False)
+            ).get(picked_code, "")
+            if (
+                country_filter in choices["countries"]
+                and country_filter != choices["country_choice"]
+            ):
+                st.session_state[f"{prefix}_pending_country"] = country_filter
                 st.rerun()
     elif analysis == "Grid squares heard by DXer":
         _dxer_table(
-            unique_logs, name_lookup, field="grid4", label="Unique 4-character grids",
+            unique_logs, name_lookup, field="grid_band_key", label="Unique 4-character grids by band",
             prefix=prefix, current_dxer=dxer_choice,
         )
-        counts = unique_logs[unique_logs["grid4"] != ""].groupby("grid4").size().reset_index(name="Unique logs")
-        maximum = max(int(counts["Unique logs"].max()), 1) if not counts.empty else 1
+        counts = (
+            unique_logs[unique_logs["grid4"] != ""]
+            .groupby("grid4")["band"]
+            .nunique()
+            .reset_index(name="Bands heard")
+        )
+        maximum = max(int(counts["Bands heard"].max()), 1) if not counts.empty else 1
         grid_rows = []
         for record in counts.to_dict("records"):
             geometry = _grid_polygon(str(record["grid4"]))
             if geometry:
                 polygon, latitude, longitude = geometry
-                grid_rows.append({**record, "polygon": polygon, "latitude": latitude, "longitude": longitude, "color": _density_color(int(record["Unique logs"]), maximum)})
+                grid_rows.append({**record, "polygon": polygon, "latitude": latitude, "longitude": longitude, "color": _density_color(int(record["Bands heard"]), maximum)})
         if grid_rows:
             event = st.pydeck_chart(
                 pdk.Deck(
                     layers=[pdk.Layer("PolygonLayer", id="challenge-grid-density", data=grid_rows, get_polygon="polygon", get_fill_color="color", get_line_color=BAND_COLORS["MW"], line_width_min_pixels=1, pickable=True, auto_highlight=True)],
                     initial_view_state=pdk.ViewState(latitude=sum(row["latitude"] for row in grid_rows) / len(grid_rows), longitude=sum(row["longitude"] for row in grid_rows) / len(grid_rows), zoom=2.2),
-                    tooltip={"text": "Grid {grid4}\n{Unique logs} unique logs"}, map_style=None,
+                    tooltip={"text": "Grid {grid4}\n{Bands heard} bands heard"}, map_style=None,
                 ),
                 key=f"{prefix}_grid_map_{selection_version}", on_select="rerun",
             )
@@ -536,12 +564,17 @@ def render_challenge_dashboard(
                     st.rerun()
     elif analysis == "Counties heard by DXer":
         _dxer_table(
-            unique_logs, name_lookup, field="county_key", label="Unique counties / parishes",
+            unique_logs, name_lookup, field="county_band_key", label="Unique counties / parishes by band",
             prefix=prefix, current_dxer=dxer_choice,
         )
         reference, geojson = county_assets()
-        counts = unique_logs[unique_logs["county_key"] != ""].groupby("county_key").size().reset_index(name="Unique logs")
-        count_lookup = dict(zip(counts["county_key"], counts["Unique logs"], strict=False))
+        counts = (
+            unique_logs[unique_logs["county_key"] != ""]
+            .groupby("county_key")["band"]
+            .nunique()
+            .reset_index(name="Bands heard")
+        )
+        count_lookup = dict(zip(counts["county_key"], counts["Bands heard"], strict=False))
         key_lookup = dict(zip(reference["geoid"], reference["county_key"], strict=False))
         maximum = max((int(value) for value in count_lookup.values()), default=1)
         features = []
@@ -549,12 +582,12 @@ def render_challenge_dashboard(
             props = feature.get("properties", {})
             county_key = key_lookup.get(str(props.get("geoid", "")), "")
             count = int(count_lookup.get(county_key, 0))
-            features.append({"type": "Feature", "geometry": feature.get("geometry", {}), "properties": {**props, "county_key": county_key, "Unique logs": count, "fill_color": _density_color(count, maximum) if count else [27, 42, 58, 155]}})
+            features.append({"type": "Feature", "geometry": feature.get("geometry", {}), "properties": {**props, "county_key": county_key, "Bands heard": count, "fill_color": _density_color(count, maximum) if count else [27, 42, 58, 155]}})
         event = st.pydeck_chart(
             pdk.Deck(
                 layers=[pdk.Layer("GeoJsonLayer", id="challenge-county-density", data={"type": "FeatureCollection", "features": features}, get_fill_color="properties.fill_color", get_line_color=[92, 130, 160, 130], line_width_min_pixels=0.25, pickable=True, auto_highlight=True)],
                 initial_view_state=pdk.ViewState(latitude=38, longitude=-96, zoom=2.6),
-                tooltip={"html": "<b>{county_label}</b><br/>{Unique logs} unique logs", "style": {"backgroundColor": surface, "color": text_color}}, map_style=None,
+                tooltip={"html": "<b>{county_label}</b><br/>{Bands heard} bands heard", "style": {"backgroundColor": surface, "color": text_color}}, map_style=None,
             ),
             key=f"{prefix}_county_map_{selection_version}", on_select="rerun",
         )
@@ -607,11 +640,11 @@ def render_challenge_dashboard(
     sort_fields = {
         "Logs by DXer": ["DXer", "reception_utc"],
         "States heard by DXer": ["station_region", "band", "DXer", "reception_utc"],
-        "Logs by Canadian province": ["station_region", "DXer", "reception_utc"],
-        "Logs by Mexican state": ["station_region", "DXer", "reception_utc"],
-        "Countries heard by DXer": ["station_country", "DXer", "reception_utc"],
-        "Grid squares heard by DXer": ["grid4", "DXer", "reception_utc"],
-        "Counties heard by DXer": ["county_key", "DXer", "reception_utc"],
+        "Logs by Canadian province": ["station_region", "band", "DXer", "reception_utc"],
+        "Logs by Mexican state": ["station_region", "band", "DXer", "reception_utc"],
+        "Countries heard by DXer": ["station_country", "band", "DXer", "reception_utc"],
+        "Grid squares heard by DXer": ["grid4", "band", "DXer", "reception_utc"],
+        "Counties heard by DXer": ["county_key", "band", "DXer", "reception_utc"],
         "Station locations": ["station_country", "station_region", "call"],
         "Paths": ["DXer", "distance_miles"],
     }
