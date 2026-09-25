@@ -42,6 +42,7 @@ COUNTRY_CODE_ALIASES = {
     "ctr": "CRI",
     "djbouti": "DJI",
     "england": "GBR",
+    "greatbritain": "GBR",
     "jmc": "JAM",
     "kampuchea": "KHM",
     "korea": "KOR",
@@ -56,14 +57,23 @@ COUNTRY_CODE_ALIASES = {
     "saotomeprincipe": "STP",
     "scn": "KNA",
     "southkorea": "KOR",
+    "scotland": "GBR",
     "thenetherlands": "NLD",
     "uae": "ARE",
+    "uk": "GBR",
     "unitedkingdom": "GBR",
+    "unitedkingdomofgreatbritainandnorthernireland": "GBR",
     "unitedstates": "USA",
     "unitedstatesofamerica": "USA",
     "usvirginislands": "VIR",
     "usa": "USA",
     "vrg": "VGB",
+    "wales": "GBR",
+}
+
+
+COUNTRY_DISPLAY_NAMES = {
+    "GBR": "United Kingdom",
 }
 
 
@@ -381,6 +391,37 @@ def country_code(value: object) -> str:
     return _country_aliases().get(token, COUNTRY_CODE_ALIASES.get(token, ""))
 
 
+def country_choropleth_counts(
+    logs: pd.DataFrame,
+    metric: str,
+    *,
+    unique_by: str | None = None,
+) -> pd.DataFrame:
+    """Aggregate stored country labels into stable ISO-3 choropleth locations."""
+    columns = ["country_code", "country", "filter_country", metric]
+    if logs.empty or "station_country" not in logs.columns:
+        return pd.DataFrame(columns=columns)
+
+    rows = logs[logs["station_country"].fillna("").astype(str).str.strip() != ""].copy()
+    rows["country_code"] = rows["station_country"].map(country_code)
+    rows = rows[rows["country_code"] != ""]
+    if rows.empty:
+        return pd.DataFrame(columns=columns)
+
+    if unique_by:
+        totals = rows.groupby("country_code")[unique_by].nunique().rename(metric)
+    else:
+        totals = rows.groupby("country_code").size().rename(metric)
+    raw_labels = rows.groupby("country_code")["station_country"].first()
+    result = totals.reset_index()
+    result["filter_country"] = result["country_code"].map(raw_labels)
+    result["country"] = [
+        COUNTRY_DISPLAY_NAMES.get(code, str(raw_labels.get(code, code)))
+        for code in result["country_code"]
+    ]
+    return result[columns].sort_values(metric, ascending=False).reset_index(drop=True)
+
+
 def country_progress_geojson(logs: pd.DataFrame) -> tuple[dict[str, object], int]:
     heard_codes = {
         code
@@ -392,9 +433,11 @@ def country_progress_geojson(logs: pd.DataFrame) -> tuple[dict[str, object], int
     for feature in _country_asset().get("features", []):
         properties = feature.get("properties", {})
         code = str(properties.get("MAP_CODE", properties.get("ADM0_A3", "")))
-        heard = code in heard_codes
+        admin_code = str(properties.get("ADM0_A3", ""))
+        heard_code = admin_code if admin_code in heard_codes else code
+        heard = heard_code in heard_codes
         if heard:
-            matched.add(code)
+            matched.add(heard_code)
         features.append(
             _copy_feature(
                 feature,

@@ -184,12 +184,19 @@ def add_subdivision_keys(logs: pd.DataFrame, country_code: str) -> pd.DataFrame:
     return result[result["admin1_code"] != ""].copy()
 
 
-def subdivision_counts(logs: pd.DataFrame, country_code: str, metric: str) -> pd.DataFrame:
+def subdivision_counts(
+    logs: pd.DataFrame,
+    country_code: str,
+    metric: str,
+    *,
+    unique_by: str | None = None,
+) -> pd.DataFrame:
     rows = add_subdivision_keys(logs, country_code)
+    grouped = rows.groupby(["admin1_code", "admin1_name"])
     counts = (
-        rows.groupby(["admin1_code", "admin1_name"])
-        .size()
-        .reset_index(name=metric)
+        grouped[unique_by].nunique().reset_index(name=metric)
+        if unique_by and unique_by in rows
+        else grouped.size().reset_index(name=metric)
     )
     all_regions = pd.DataFrame(
         [
