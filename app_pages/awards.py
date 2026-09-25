@@ -38,10 +38,6 @@ rows = qualifying_rows(logs, rule) if not logs.empty else pd.DataFrame()
 
 with st.container(border=True):
     st.subheader(selected_award)
-    if rule.get("field") == "wfo":
-        st.warning("WFO progress is listed in the confirmed rules, but the canonical WFO field is not yet present in the NWR station schema.")
-        st.stop()
-
     if "components" in rule:
         components = rule["components"]
         leaders = component_progress(rows, components, str(rule["band"])) if not rows.empty else pd.DataFrame()
@@ -125,9 +121,26 @@ else:
         detail = detail[detail["award_propagation"].isin(components)].drop_duplicates("station_id")
     else:
         detail = detail[detail[str(rule["field"])].fillna("").astype(str) != ""].drop_duplicates(str(rule["field"]))
+    detail_columns = [
+        "reception_utc",
+        "call",
+        "frequency",
+        "station_city",
+        "station_region",
+        "station_country",
+        "station_county",
+        "station_grid",
+        "propagation",
+        "distance_miles",
+    ]
+    if rule.get("field") == "wfo":
+        detail["Weather Forecast Office (WFO)"] = (
+            detail["wfo"].fillna("").astype(str).str.replace("|", ", ", regex=False)
+        )
+        detail_columns.insert(3, "Weather Forecast Office (WFO)")
     st.dataframe(
         display_log_table(
-            detail[["reception_utc", "call", "frequency", "station_city", "station_region", "station_country", "station_county", "station_grid", "propagation", "distance_miles"]],
+            detail[detail_columns],
             st.session_state.user,
         ),
         hide_index=True,

@@ -14,7 +14,12 @@ import pydeck as pdk
 import streamlit as st
 
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
-from dxcore.metrics import add_geography_keys, normalize_county, valid_station_coordinates
+from dxcore.metrics import (
+    add_geography_keys,
+    challenge_scores,
+    normalize_county,
+    valid_station_coordinates,
+)
 from dxcore.presentation import display_log_table
 from dxcore.subdivisions import (
     add_subdivision_keys,
@@ -125,16 +130,35 @@ def _apply_pending(prefix: str, filter_keys: dict[str, str], valid_values: dict[
             st.session_state[filter_keys[field]] = pending
 
 
-def _select_dxer(event: object, table: pd.DataFrame, prefix: str, current: str) -> None:
+def _queue_dxer_filter(prefix: str, user_id: str) -> None:
+    st.session_state[f"{prefix}_pending_dxer"] = user_id
+    st.session_state[f"{prefix}_selection_version"] = int(
+        st.session_state.get(f"{prefix}_selection_version", 0)
+    ) + 1
+
+
+def _selected_dxer(event: object, table: pd.DataFrame) -> str | None:
+    """Resolve a selected display row without trusting stale browser positions."""
     try:
         selected_rows = event.selection.rows
     except (AttributeError, KeyError, TypeError):
-        return
+        return None
     if not selected_rows:
-        return
-    selected = str(table.iloc[selected_rows[0]]["user_id"])
+        return None
+    try:
+        position = int(selected_rows[0])
+    except (TypeError, ValueError):
+        return None
+    if position < 0 or position >= len(table):
+        return None
+    selected = str(table.iloc[position].get("user_id", "")).strip()
+    return selected or None
+
+
+def _select_dxer(event: object, table: pd.DataFrame, prefix: str, current: str) -> None:
+    selected = _selected_dxer(event, table)
     if selected and selected != current:
-        st.session_state[f"{prefix}_pending_dxer"] = selected
+        _queue_dxer_filter(prefix, selected)
         st.rerun()
 
 
@@ -146,9 +170,13 @@ def _dxer_table(
     label: str,
     prefix: str,
     current_dxer: str,
+    scoring_method: str | None = None,
 ) -> None:
-    valid = rows[rows[field].fillna("").astype(str).str.strip() != ""]
-    table = valid.groupby("user_id")[field].nunique().reset_index(name=label)
+    if scoring_method:
+        table = challenge_scores(rows, scoring_method).rename(columns={"score": label})
+    else:
+        valid = rows[rows[field].fillna("").astype(str).str.strip() != ""]
+        table = valid.groupby("user_id")[field].nunique().reset_index(name=label)
     if table.empty:
         st.caption(f"No {label.casefold()} are available for the selected filters.")
         return
@@ -156,12 +184,13 @@ def _dxer_table(
     maximum = max(int(table[label].max()), 1)
     table["Relative scale"] = table[label] / maximum * 100
     table.insert(0, "DXer", table["user_id"].map(lambda value: name_lookup.get(str(value), "DXer")))
+    selection_version = int(st.session_state.get(f"{prefix}_selection_version", 0))
     event = st.dataframe(
         table.drop(columns=["user_id"]),
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        key=f"{prefix}_{_token(label)}_table",
+        key=f"{prefix}_{_token(label)}_table_{selection_version}",
         column_config={
             "Relative scale": st.column_config.ProgressColumn(
                 "Relative scale", min_value=0.0, max_value=100.0, format="%.0f%%"
@@ -176,6 +205,7 @@ def _render_filters(
     logs: pd.DataFrame,
     name_lookup: dict[str, str],
     prefix: str,
+    current_user_id: str,
 ) -> tuple[pd.DataFrame, str, dict[str, object]]:
     filter_version = int(st.session_state.get(f"{prefix}_filter_version", 0))
     filter_keys = {
@@ -235,13 +265,36 @@ def _render_filters(
             format_func=lambda value: "All" if value == "All" else county_labels.get(value, value),
         )
 
-    st.button(
-        "Clear challenge filters",
-        icon=":material/filter_alt_off:",
-        on_click=_clear_filters,
-        args=(prefix,),
-        key=f"{prefix}_clear",
-    )
+    with st.container(horizontal=True):
+        st.button(
+            "My logs",
+            icon=":material/person:",
+            type="primary" if dxer_choice == current_user_id else "secondary",
+            disabled=current_user_id not in dxers,
+            help=(
+                "Show only your qualifying receptions for this challenge."
+                if current_user_id in dxers
+                else "You do not have a qualifying reception in this challenge yet."
+            ),
+            on_click=_queue_dxer_filter,
+            args=(prefix, current_user_id),
+            key=f"{prefix}_my_logs",
+        )
+        st.button(
+            "All DXers",
+            icon=":material/groups:",
+            type="primary" if dxer_choice == "__ALL__" else "secondary",
+            on_click=_queue_dxer_filter,
+            args=(prefix, "__ALL__"),
+            key=f"{prefix}_all_dxers",
+        )
+        st.button(
+            "Clear challenge filters",
+            icon=":material/filter_alt_off:",
+            on_click=_clear_filters,
+            args=(prefix,),
+            key=f"{prefix}_clear",
+        )
 
     filtered = logs[logs["band"].isin(bands) & logs["propagation"].isin(propagation)].copy()
     if dxer_choice != "__ALL__":
@@ -279,7 +332,11 @@ def render_challenge_dashboard(
         return
     logs = add_geography_keys(rows)
     prefix = f"challenge_{_token(challenge.get('id', challenge.get('name', 'selected')))}"
-    filtered, dxer_choice, choices = _render_filters(logs, name_lookup, prefix)
+    scoring_method = str(challenge.get("scoring_method", "Unique stations"))
+    current_user_id = str(st.session_state.user.get("user_id", ""))
+    filtered, dxer_choice, choices = _render_filters(
+        logs, name_lookup, prefix, current_user_id
+    )
     if filtered.empty:
         st.warning("No qualifying challenge receptions match these filters.")
         return
@@ -289,10 +346,18 @@ def render_challenge_dashboard(
         st.metric("Receptions", f"{len(filtered):,}", border=True)
         st.metric("Unique stations", f"{unique_logs['station_id'].nunique():,}", border=True)
         st.metric("DXers", f"{unique_logs['user_id'].nunique():,}", border=True)
-        st.metric("States / provinces", f"{unique_logs['station_region'].replace('', pd.NA).nunique():,}", border=True)
+        st.metric("States / provinces by band", f"{unique_logs['region_band_key'].replace('', pd.NA).nunique():,}", border=True)
         st.metric("Countries", f"{unique_logs['station_country'].replace('', pd.NA).nunique():,}", border=True)
         st.metric("4-character grids", f"{unique_logs['grid4'].replace('', pd.NA).nunique():,}", border=True)
         st.metric("Counties / parishes", f"{unique_logs['county_key'].replace('', pd.NA).nunique():,}", border=True)
+
+    if scoring_method == "Unique states/provinces":
+        st.info(
+            "This is a band-aware state/province challenge: each state or province "
+            "can score once on MW, once on FM, and once on NWR for each DXer. "
+            "For example, Louisiana heard on all three bands is worth 3 points.",
+            icon=":material/radio:",
+        )
 
     analysis = st.selectbox(
         "Challenge analysis",
@@ -311,38 +376,61 @@ def render_challenge_dashboard(
     selection_version = int(st.session_state.get(f"{prefix}_selection_version", 0))
 
     if analysis == "Logs by DXer":
+        scoring_labels = {
+            "Unique stations": "Unique stations",
+            "Unique states/provinces": "Unique states / provinces by band",
+            "Unique countries": "Unique countries",
+            "Unique 4-character grids": "Unique 4-character grids",
+            "Unique counties/parishes": "Unique counties / parishes",
+            "Total receptions": "Total receptions",
+        }
         _dxer_table(
-            unique_logs, name_lookup, field="station_id", label="Unique stations",
-            prefix=prefix, current_dxer=dxer_choice,
+            filtered,
+            name_lookup,
+            field="station_id",
+            label=scoring_labels.get(scoring_method, "Unique stations"),
+            prefix=prefix,
+            current_dxer=dxer_choice,
+            scoring_method=scoring_method,
         )
     elif analysis == "States heard by DXer":
         us_rows = unique_logs[
             unique_logs["station_country"].astype(str).str.casefold().isin(US_NAMES)
         ]
         _dxer_table(
-            us_rows, name_lookup, field="station_region", label="Unique US states",
+            us_rows, name_lookup, field="region_band_key", label="Unique US states by band",
             prefix=prefix, current_dxer=dxer_choice,
         )
-        counts = us_rows[us_rows["station_region"] != ""].groupby("station_region").size().reset_index(name="Unique logs").rename(columns={"station_region": "region"})
+        counts = (
+            us_rows[us_rows["station_region"] != ""]
+            .groupby("station_region")["band"]
+            .nunique()
+            .reset_index(name="Bands heard")
+            .rename(columns={"station_region": "region"})
+        )
         state_data = pd.DataFrame([{"region": region, "id": fips} for region, fips in STATE_FIPS.items()]).merge(counts, on="region", how="left")
-        state_data["Unique logs"] = state_data["Unique logs"].fillna(0).astype(int)
+        state_data["Bands heard"] = state_data["Bands heard"].fillna(0).astype(int)
         pick = alt.selection_point(fields=["region"], name="challenge_state_pick", on="click")
         chart = (
             alt.Chart(alt.topo_feature(US_TOPO, "states"))
             .mark_geoshape(stroke=palette["border"], strokeWidth=0.7)
-            .transform_lookup(lookup="id", from_=alt.LookupData(state_data, "id", ["region", "Unique logs"]))
+            .transform_lookup(lookup="id", from_=alt.LookupData(state_data, "id", ["region", "Bands heard"]))
             .encode(
                 color=alt.condition(
-                    "datum['Unique logs'] > 0",
-                    alt.Color("Unique logs:Q", scale=alt.Scale(range=["#174A6B", "#168CC4", "#7DE3FF"])),
+                    "datum['Bands heard'] > 0",
+                    alt.Color("Bands heard:Q", scale=alt.Scale(range=["#174A6B", "#168CC4", "#7DE3FF"])),
                     alt.value(empty_fill),
                 ),
-                tooltip=[alt.Tooltip("region:N", title="State"), alt.Tooltip("Unique logs:Q")],
+                tooltip=[alt.Tooltip("region:N", title="State"), alt.Tooltip("Bands heard:Q")],
                 opacity=alt.condition(pick, alt.value(1), alt.value(0.88)),
             )
             .project(type="albersUsa").add_params(pick).properties(height=460, background=background)
         )
         event = st.altair_chart(chart, key=f"{prefix}_state_map_{selection_version}", on_select="rerun", selection_mode="challenge_state_pick")
+        st.caption(
+            "Map density shows how many selected bands have produced at least one "
+            "qualifying reception from each state."
+        )
         if picked := _selection_value(event, "challenge_state_pick", "region"):
             if picked != choices["region_choice"]:
                 st.session_state[f"{prefix}_pending_region"] = picked
@@ -518,7 +606,7 @@ def render_challenge_dashboard(
     table.insert(1, "DXer", table["user_id"].map(lambda value: name_lookup.get(str(value), "DXer")))
     sort_fields = {
         "Logs by DXer": ["DXer", "reception_utc"],
-        "States heard by DXer": ["station_region", "DXer", "reception_utc"],
+        "States heard by DXer": ["station_region", "band", "DXer", "reception_utc"],
         "Logs by Canadian province": ["station_region", "DXer", "reception_utc"],
         "Logs by Mexican state": ["station_region", "DXer", "reception_utc"],
         "Countries heard by DXer": ["station_country", "DXer", "reception_utc"],

@@ -49,6 +49,8 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
         "format",
         "network_slogan",
         "station_notes",
+        "rds_pi",
+        "wfo",
     ]:
         if column not in frame:
             frame[column] = ""
@@ -84,6 +86,8 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
             "format",
             "network_slogan",
             "station_notes",
+            "rds_pi",
+            "wfo",
         ]
     ].drop_duplicates("station_id")
 
@@ -105,6 +109,8 @@ def load_stations() -> pd.DataFrame:
             "format": mw.get("Format", ""),
             "network_slogan": mw.get("Network/Slogan", ""),
             "station_notes": mw.get("Notes", ""),
+            "rds_pi": "",
+            "wfo": "",
         }
     )
 
@@ -123,6 +129,8 @@ def load_stations() -> pd.DataFrame:
             "format": international.get("Format", ""),
             "network_slogan": international.get("Network/Slogan", ""),
             "station_notes": international.get("Notes", ""),
+            "rds_pi": "",
+            "wfo": "",
         }
     )
 
@@ -141,6 +149,8 @@ def load_stations() -> pd.DataFrame:
             "format": fm.get("Format", ""),
             "network_slogan": fm.get("Slogan", ""),
             "station_notes": "",
+            "rds_pi": fm.get("PI Code", ""),
+            "wfo": "",
         }
     )
 
@@ -212,6 +222,8 @@ def load_stations() -> pd.DataFrame:
             "format": "",
             "network_slogan": "",
             "station_notes": "",
+            "rds_pi": "",
+            "wfo": nwr.get("WFO", ""),
         }
     )
     return _finalize(pd.concat([mw_frame, international_frame, fm_frame, nwr_frame], ignore_index=True))

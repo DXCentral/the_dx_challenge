@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from dxcore.metrics import add_geography_keys, canonical_daypart, canonical_propagation
+from dxcore.stations import load_stations
 
 
 AWARDS: dict[str, dict[str, object]] = {
@@ -33,6 +34,19 @@ def qualifying_rows(logs: pd.DataFrame, rule: dict[str, object]) -> pd.DataFrame
     if logs.empty or "band" not in logs:
         return pd.DataFrame()
     rows = add_geography_keys(logs[logs["band"] == rule["band"]])
+    if rule.get("field") == "wfo":
+        station_wfo = (
+            load_stations()
+            .drop_duplicates("station_id")
+            .set_index("station_id")["wfo"]
+        )
+        existing = (
+            rows["wfo"].fillna("").astype(str)
+            if "wfo" in rows
+            else pd.Series("", index=rows.index, dtype=str)
+        )
+        resolved = rows["station_id"].astype(str).map(station_wfo).fillna("")
+        rows["wfo"] = existing.where(existing.str.strip().ne(""), resolved)
     if rule.get("graveyard"):
         rows = rows[pd.to_numeric(rows["frequency"], errors="coerce").isin(GRAVEYARD)]
     if rule.get("field") == "station_region":

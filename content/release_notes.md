@@ -1,3 +1,22 @@
+### Version 1.0.0-rc10.16.2 · Multi-band state challenge scoring
+
+- Made Unique states/provinces challenge scoring band-aware: the same state or province can score once each on MW, FM, and NWR for every DXer.
+- Connected the Challenge dashboard's default Logs by DXer ranking to the challenge's saved scoring method instead of always displaying unique stations.
+- Updated challenge state/province counters, DXer tables, map density, tooltips, and explanatory text so the interface consistently reflects band-state points.
+- Preserved the former result for single-band challenges, where each state or province still counts only once per DXer.
+
+### Version 1.0.0-rc10.16.1 · Challenge DXer-filter hotfix
+
+- Corrected the Challenge analysis DXer-table selection crash caused by a retained browser row position after the selected DXer changed the filtered table's size.
+- Added bounds-safe row resolution and remounted the DXer result table after a selection so stale positions cannot be applied to reordered or shortened results.
+- Added one-click My logs and All DXers controls beside the challenge filters; My logs is disabled with an explanation until the signed-in DXer has a qualifying reception.
+
+### Version 1.0.0-rc10.16 · FM RDS and NWR office details
+
+- Added WTFDA RDS PI codes to FM Station list rows and Station map hover details.
+- Added NOAA Weather Forecast Office information to NWR Station list rows and Station map hover details.
+- Activated the existing NWR WFO Hunter award by resolving each logged NWR station back to its canonical NOAA office without adding another field to historical Google Sheet records.
+
 ### Version 1.0.0-rc10.15.2 · Visible full-screen frequency menu
 
 - Raised Streamlit's actual selectbox portal container above the full-screen Station map workspace, correcting the frequency menu that could open structurally while remaining visually hidden behind the map.
