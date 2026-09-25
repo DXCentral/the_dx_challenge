@@ -76,6 +76,13 @@ def format_frequency(band: str, value: float) -> str:
     return f"{value:.3f} MHz" if band == "NWR" else f"{value:.1f} MHz"
 
 
+def format_wfo(value: object) -> str:
+    """Present NOAA's canonical office|state key as a readable office label."""
+    if pd.isna(value):
+        return ""
+    return str(value).strip().replace("|", ", ")
+
+
 def manual_station_id(band: str, frequency: float, call: str, city: str, region: str, country: str) -> str:
     raw = f"{band}|{frequency:.3f}|{call}|{city}|{region}|{country}".upper()
     return f"manual_{hashlib.sha1(raw.encode()).hexdigest()[:16]}"
@@ -342,18 +349,28 @@ if entry_mode in {"Station list", "Station map"}:
         view_columns = ["frequency", "call", "city", "region", "country"]
         if band in {"MW", "FM"}:
             view_columns.extend(["format", "network_slogan"])
+        if band == "FM":
+            view_columns.append("rds_pi")
         if band == "MW":
             view_columns.append("station_notes")
+        if band == "NWR":
+            view_columns.append("wfo")
         view_columns.extend(["county", "grid", "logged"])
         view = table_matches[view_columns].copy()
+        if band == "NWR":
+            view["wfo"] = view["wfo"].map(format_wfo)
         view[distance_label] = table_matches["distance_miles"].map(
             lambda value: convert_distance(value, preferences)
         )
         ordered_columns = ["frequency", "call", "city", "region", "country"]
         if band in {"MW", "FM"}:
             ordered_columns.extend(["format", "network_slogan"])
+        if band == "FM":
+            ordered_columns.append("rds_pi")
         if band == "MW":
             ordered_columns.append("station_notes")
+        if band == "NWR":
+            ordered_columns.append("wfo")
         ordered_columns.extend(["county", "grid", distance_label, "logged"])
         slogan_column_label = "Slogan" if band == "FM" else "Network / slogan"
         view = view[ordered_columns].rename(
@@ -366,6 +383,8 @@ if entry_mode in {"Station list", "Station map"}:
                 "format": "Format",
                 "network_slogan": slogan_column_label,
                 "station_notes": "FM //s / notes",
+                "rds_pi": "RDS PI code",
+                "wfo": "Weather Forecast Office (WFO)",
                 "county": "County / parish",
                 "grid": "Grid",
                 "logged": "History",
@@ -377,7 +396,9 @@ if entry_mode in {"Station list", "Station map"}:
                 "are provided courtesy of Tim Tromp."
             )
         elif band == "FM":
-            st.caption("FM format and slogan information is provided by the WTFDA station data.")
+            st.caption("FM format, slogan, and RDS PI code information is provided by the WTFDA station data.")
+        elif band == "NWR":
+            st.caption("Weather Forecast Office information is provided by the NOAA station data.")
         styled_view = view.style.apply(
             lambda row: [
                 "background-color: #BFE8D0; color: #123B26; font-weight: 600"
@@ -400,8 +421,12 @@ if entry_mode in {"Station list", "Station map"}:
                     slogan_column_label: st.column_config.TextColumn(width="medium"),
                 }
             )
+        if band == "FM":
+            station_column_config["RDS PI code"] = st.column_config.TextColumn(width="small")
         if band == "MW":
             station_column_config["FM //s / notes"] = st.column_config.TextColumn(width="large")
+        if band == "NWR":
+            station_column_config["Weather Forecast Office (WFO)"] = st.column_config.TextColumn(width="medium")
         event = st.dataframe(
             styled_view,
             hide_index=True,
@@ -478,8 +503,12 @@ if entry_mode in {"Station list", "Station map"}:
             "format",
             "network_slogan",
             "station_notes",
+            "rds_pi",
+            "wfo",
         ]:
             map_matches[column] = map_matches[column].map(map_text)
+        if band == "NWR":
+            map_matches["wfo"] = map_matches["wfo"].map(format_wfo).map(map_text)
 
         points = map_matches[["longitude", "latitude"]].values.tolist()
         map_context = "workspace" if workspace_active else "standard"
@@ -514,6 +543,8 @@ if entry_mode in {"Station list", "Station map"}:
                     else "<b>Network / slogan:</b> {network_slogan}"
                 )
             )
+        if band == "FM":
+            tooltip_html += "<br/><b>RDS PI code:</b> {rds_pi}"
         if band == "MW":
             tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}"
             controls.caption(
@@ -521,7 +552,10 @@ if entry_mode in {"Station list", "Station map"}:
                 "are provided courtesy of Tim Tromp."
             )
         elif band == "FM":
-            controls.caption("FM format and slogan information is provided by the WTFDA station data.")
+            controls.caption("FM format, slogan, and RDS PI code information is provided by the WTFDA station data.")
+        elif band == "NWR":
+            tooltip_html += "<br/><b>Weather Forecast Office:</b> {wfo}"
+            controls.caption("Weather Forecast Office information is provided by the NOAA station data.")
         selected_theme = THEMES.get(
             str(preferences.get("theme_name", "Midnight blue")),
             THEMES["Midnight blue"],

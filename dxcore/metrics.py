@@ -25,9 +25,15 @@ def normalize_county(value: object) -> str:
 def add_geography_keys(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     result["grid4"] = result.get("station_grid", pd.Series(index=result.index, dtype=str)).map(grid4)
+    bands = result.get("band", pd.Series(index=result.index, dtype=str)).fillna("").astype(str).str.upper()
+    countries = result.get("station_country", pd.Series(index=result.index, dtype=str)).fillna("").astype(str).str.upper()
     regions = result.get("station_region", pd.Series(index=result.index, dtype=str)).fillna("").astype(str).str.upper()
     counties = result.get("station_county", pd.Series(index=result.index, dtype=str)).map(normalize_county)
     result["county_key"] = [f"{region}|{county}" if region and county else "" for region, county in zip(regions, counties, strict=False)]
+    result["region_band_key"] = [
+        f"{band}|{country}|{region}" if region else ""
+        for band, country, region in zip(bands, countries, regions, strict=False)
+    ]
     return result
 
 
@@ -87,7 +93,10 @@ def challenge_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
     rows = add_geography_keys(logs)
     fields = {
         "Unique stations": "station_id",
-        "Unique states/provinces": "station_region",
+        # A state or province may score once on each band. This is identical
+        # to the prior behavior for a single-band challenge while encouraging
+        # MW, FM, and NWR activity in multi-band sprints.
+        "Unique states/provinces": "region_band_key",
         "Unique countries": "station_country",
         "Unique 4-character grids": "grid4",
         "Unique counties/parishes": "county_key",

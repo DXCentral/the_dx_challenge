@@ -123,7 +123,13 @@ def get_station_data() -> pd.DataFrame:
         "county", "grid", "latitude", "longitude",
     ]
     overrides = overrides[columns].copy()
-    metadata_columns = ["format", "network_slogan", "station_notes"]
+    metadata_columns = [
+        "format",
+        "network_slogan",
+        "station_notes",
+        "rds_pi",
+        "wfo",
+    ]
     base_metadata = base.set_index("station_id")[metadata_columns]
     for column in metadata_columns:
         overrides[column] = (
