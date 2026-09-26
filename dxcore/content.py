@@ -7,10 +7,12 @@ import pandas as pd
 
 from dxcore.config import CONTENT_DIR
 from dxcore.metrics import canonical_daypart, canonical_propagation
+from dxcore.propagation import normalize_mw_propagation
 
 
 CHALLENGE_FILE = CONTENT_DIR / "challenge_schedule.csv"
 ANNOUNCEMENT_FILE = CONTENT_DIR / "announcements.csv"
+SUPPORTED_BANDS = ("MW", "FM", "NWR")
 
 
 def _text(value: object) -> str:
@@ -23,6 +25,44 @@ def _enabled(value: object) -> bool:
 
 def _items(value: object) -> list[str]:
     return [item.strip() for item in re.split(r"[|;]", _text(value)) if item.strip()]
+
+
+def ordered_band_options(values: object) -> list[str]:
+    """Return unique configured bands in the app's standard display order."""
+    if isinstance(values, str):
+        candidates = _items(values)
+    else:
+        try:
+            candidates = list(values)  # type: ignore[arg-type]
+        except TypeError:
+            candidates = []
+    normalized = {
+        str(value).strip().upper() for value in candidates if str(value).strip()
+    }
+    return [band for band in SUPPORTED_BANDS if band in normalized] + sorted(
+        normalized.difference(SUPPORTED_BANDS)
+    )
+
+
+def challenge_propagation_rules(
+    rules: dict[str, object],
+) -> tuple[set[str], set[str]]:
+    """Split mixed Admin propagation choices into MW and FM/NWR restrictions."""
+    mw_dayparts = {
+        canonical_daypart(item).casefold()
+        for item in rules.get("dayparts", [])
+        if canonical_daypart(item)
+    }
+    fm_nwr_modes: set[str] = set()
+    for item in rules.get("propagation_modes", []):
+        mw_value = normalize_mw_propagation(item)
+        if mw_value:
+            mw_dayparts.add(canonical_daypart(mw_value).casefold())
+        else:
+            normalized = canonical_propagation(item).casefold()
+            if normalized:
+                fm_nwr_modes.add(normalized)
+    return mw_dayparts, fm_nwr_modes
 
 
 def _utc(value: object) -> datetime:
@@ -80,7 +120,7 @@ def challenges_from_frame(frame: pd.DataFrame) -> list[dict[str, object]]:
     for row in frame.to_dict("records"):
         if not _enabled(row.get("active", "true")):
             continue
-        bands = [value.upper() for value in _items(row.get("bands", ""))]
+        bands = ordered_band_options(row.get("bands", ""))
         frequencies = parse_frequency_spec(row.get("frequencies", "ALL"))
         challenge = {
             "id": _text(row.get("challenge_id")),
@@ -180,15 +220,18 @@ def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, objec
         return False
     rules = challenge["rules"]
     raw_propagation = value.get("propagation")
-    propagation = canonical_propagation(raw_propagation).casefold()
-    modes = {
-        canonical_propagation(item).casefold()
-        for item in rules.get("propagation_modes", [])
-    }
-    dayparts = {canonical_daypart(item).casefold() for item in rules.get("dayparts", [])}
-    if modes and propagation not in modes:
-        return False
-    if dayparts and canonical_daypart(raw_propagation).casefold() not in dayparts:
+    band = str(value.get("band", "")).strip().upper()
+    mw_dayparts, fm_nwr_modes = challenge_propagation_rules(rules)
+    if band == "MW":
+        if (
+            mw_dayparts
+            and canonical_daypart(raw_propagation).casefold() not in mw_dayparts
+        ):
+            return False
+    elif (
+        fm_nwr_modes
+        and canonical_propagation(raw_propagation).casefold() not in fm_nwr_modes
+    ):
         return False
     return True
 
@@ -240,15 +283,16 @@ def challenge_log_mask(
     mask &= receptions.between(challenge["start_utc"], challenge["end_utc"])
 
     raw_propagation = logs["propagation"].fillna("")
-    modes = {
-        canonical_propagation(item).casefold()
-        for item in rules.get("propagation_modes", [])
-    }
-    dayparts = {canonical_daypart(item).casefold() for item in rules.get("dayparts", [])}
-    if modes:
-        mask &= raw_propagation.map(canonical_propagation).str.casefold().isin(modes)
-    if dayparts:
-        mask &= raw_propagation.map(canonical_daypart).str.casefold().isin(dayparts)
+    bands = logs["band"].fillna("").astype(str).str.strip().str.upper()
+    mw_dayparts, fm_nwr_modes = challenge_propagation_rules(rules)
+    if mw_dayparts:
+        mask &= ~bands.eq("MW") | raw_propagation.map(
+            canonical_daypart
+        ).str.casefold().isin(mw_dayparts)
+    if fm_nwr_modes:
+        mask &= bands.eq("MW") | raw_propagation.map(
+            canonical_propagation
+        ).str.casefold().isin(fm_nwr_modes)
     return mask.fillna(False)
 
 

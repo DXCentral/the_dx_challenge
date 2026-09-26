@@ -14,6 +14,7 @@ import pydeck as pdk
 import streamlit as st
 
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
+from dxcore.content import ordered_band_options
 from dxcore.metrics import (
     add_geography_keys,
     challenge_scores,
@@ -207,6 +208,7 @@ def _render_filters(
     name_lookup: dict[str, str],
     prefix: str,
     current_user_id: str,
+    allowed_bands: list[str],
 ) -> tuple[pd.DataFrame, str, dict[str, object]]:
     filter_version = int(st.session_state.get(f"{prefix}_filter_version", 0))
     filter_keys = {
@@ -236,7 +238,9 @@ def _render_filters(
     with st.container(border=True):
         st.markdown("**Challenge filters**")
         first = st.columns(4)
-        all_bands = sorted(logs["band"].astype(str).unique())
+        all_bands = allowed_bands or ordered_band_options(
+            logs["band"].astype(str).unique()
+        )
         all_propagation = sorted(logs["propagation"].astype(str).unique())
         bands = first[0].multiselect("Band", all_bands, default=all_bands, key=filter_keys["bands"])
         propagation = first[1].multiselect(
@@ -335,8 +339,9 @@ def render_challenge_dashboard(
     prefix = f"challenge_{_token(challenge.get('id', challenge.get('name', 'selected')))}"
     scoring_method = str(challenge.get("scoring_method", "Unique stations"))
     current_user_id = str(st.session_state.user.get("user_id", ""))
+    allowed_bands = ordered_band_options(challenge.get("bands", []))
     filtered, dxer_choice, choices = _render_filters(
-        logs, name_lookup, prefix, current_user_id
+        logs, name_lookup, prefix, current_user_id, allowed_bands
     )
     if filtered.empty:
         st.warning("No qualifying challenge receptions match these filters.")
