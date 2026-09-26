@@ -10,7 +10,7 @@ from app_support import (
     season_eligible_logs,
     season_marathons,
 )
-from dxcore.content import logs_qualifying_for_challenges
+from dxcore.content import logs_qualifying_for_challenges, ordered_band_options
 from dxcore.metrics import add_geography_keys, canonical_daypart
 
 
@@ -25,6 +25,7 @@ def filter_logs(
     *,
     prefix: str,
     sprint_names: list[str] | None = None,
+    band_options: list[str] | None = None,
 ) -> pd.DataFrame:
     version = int(st.session_state.get(f"{prefix}_filter_version", 0))
     key = lambda field: f"{prefix}_{field}_{version}"
@@ -45,7 +46,9 @@ def filter_logs(
     with st.container(border=True):
         st.markdown("**Leaderboard filters**")
         first = st.columns(4)
-        all_bands = sorted(logs["band"].astype(str).unique())
+        all_bands = band_options or ordered_band_options(
+            logs["band"].astype(str).unique()
+        )
         all_propagation = sorted(logs["propagation"].astype(str).unique())
         bands = first[0].multiselect("Band", all_bands, default=all_bands, key=key("bands"))
         propagation = first[1].multiselect(
@@ -143,7 +146,19 @@ if marathons:
     )
 else:
     st.warning("No enabled season marathon is configured, so season standings are paused.")
-season_filtered = filter_logs(logs, name_lookup, prefix="season_leaders") if not logs.empty else logs
+season_band_options = ordered_band_options(
+    band for challenge in marathons for band in challenge.get("bands", [])
+)
+season_filtered = (
+    filter_logs(
+        logs,
+        name_lookup,
+        prefix="season_leaders",
+        band_options=season_band_options,
+    )
+    if not logs.empty
+    else logs
+)
 season_table = standings(season_filtered, name_lookup)
 if season_table.empty:
     st.caption("No season receptions match these filters.")
@@ -166,8 +181,15 @@ if not qualified_frames:
 else:
     sprint_logs = pd.concat(qualified_frames, ignore_index=True)
     sprint_names = [str(item["name"]) for item in sprints]
+    sprint_band_options = ordered_band_options(
+        band for challenge in sprints for band in challenge.get("bands", [])
+    )
     sprint_filtered = filter_logs(
-        sprint_logs, name_lookup, prefix="sprint_leaders", sprint_names=sprint_names
+        sprint_logs,
+        name_lookup,
+        prefix="sprint_leaders",
+        sprint_names=sprint_names,
+        band_options=sprint_band_options,
     )
     sprint_table = standings(sprint_filtered, name_lookup)
     if sprint_table.empty:

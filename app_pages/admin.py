@@ -230,8 +230,10 @@ elif section == "Challenges":
             propagation_options,
             default=propagation_defaults,
             help=(
-                "MW Sunrise, Daytime, Sunset, and Nighttime choices live here with the "
-                f"FM/NWR propagation modes. {MW_DAYPART_HELP}"
+                "Selections are band-scoped: MW dayparts restrict only MW, while Local, "
+                "Tropo, Meteor Scatter, Sporadic E, Aurora, Aircraft Scatter, and Other "
+                "restrict only FM/NWR. Leave this blank for no propagation restriction. "
+                f"{MW_DAYPART_HELP}"
             ),
         )
         dayparts = [

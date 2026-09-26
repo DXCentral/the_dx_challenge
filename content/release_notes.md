@@ -1,3 +1,15 @@
+### Version 1.0.0-rc10.16.6 · Band-scoped sprint qualification
+
+- Corrected multi-band sprint qualification so MW daypart restrictions apply only to MW receptions and FM/NWR propagation restrictions apply only to FM and NWR receptions.
+- Restored already-submitted qualifying FM and NWR logs to active Challenge results automatically; no reception edits or re-imports are required.
+- Retained the rc10.16.5 leaderboard-filter improvement so every configured sprint band remains selectable before or after its first qualifying reception.
+
+### Version 1.0.0-rc10.16.5 · Multi-band leaderboard filters
+
+- Made the active Challenge dashboard's Band filter use every band configured for the selected sprint, even before a band receives its first qualifying log.
+- Made the Season and Sprint Leaderboards use the enabled marathon and sprint band configurations instead of limiting their selectors to bands already represented in the current results.
+- Preserved all saved challenge restrictions: choosing MW, FM, or NWR only changes the displayed results and does not bypass date, frequency, geography, distance, or propagation rules.
+
 ### Version 1.0.0-rc10.16.4 · United Kingdom country-map normalization
 
 - Normalized England, Scotland, Wales, Northern Ireland, Great Britain, and UK variants to the United Kingdom's stable GBR country code.
