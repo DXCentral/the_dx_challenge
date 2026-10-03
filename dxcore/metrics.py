@@ -10,6 +10,14 @@ COUNTY_SUFFIXES = re.compile(
     flags=re.IGNORECASE,
 )
 
+CHALLENGE_SCORE_FIELDS = {
+    "Unique stations": "station_id",
+    "Unique states/provinces": "region_band_key",
+    "Unique countries": "country_band_key",
+    "Unique 4-character grids": "grid_band_key",
+    "Unique counties/parishes": "county_band_key",
+}
+
 
 def grid4(value: object) -> str:
     text = "" if pd.isna(value) else str(value).strip().upper()
@@ -103,19 +111,11 @@ def challenge_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
     if logs.empty:
         return pd.DataFrame(columns=["user_id", "score"])
     rows = add_geography_keys(logs)
-    fields = {
-        "Unique stations": "station_id",
-        # A state or province may score once on each band. This is identical
-        # to the prior behavior for a single-band challenge while encouraging
-        # MW, FM, and NWR activity in multi-band sprints.
-        "Unique states/provinces": "region_band_key",
-        "Unique countries": "country_band_key",
-        "Unique 4-character grids": "grid_band_key",
-        "Unique counties/parishes": "county_band_key",
-    }
     if scoring_method == "Total receptions":
         return rows.groupby("user_id").size().reset_index(name="score").sort_values("score", ascending=False)
-    field = fields.get(scoring_method, "station_id")
+    # Geography keys include the band, so the same state, country, grid, or
+    # county can score once on each band in a multi-band sprint.
+    field = CHALLENGE_SCORE_FIELDS.get(scoring_method, "station_id")
     valid = rows[rows[field].fillna("").astype(str).str.strip() != ""]
     return (
         valid.groupby("user_id")[field]
@@ -123,3 +123,24 @@ def challenge_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
         .reset_index(name="score")
         .sort_values("score", ascending=False)
     )
+
+
+def challenge_band_scores(logs: pd.DataFrame, scoring_method: str) -> pd.DataFrame:
+    """Return each DXer's challenge score broken out across all three bands."""
+    columns = ["user_id", "MW", "FM", "NWR"]
+    if logs.empty:
+        return pd.DataFrame(columns=columns)
+    rows = add_geography_keys(logs)
+    result = rows[["user_id"]].drop_duplicates().reset_index(drop=True)
+    field = CHALLENGE_SCORE_FIELDS.get(scoring_method, "station_id")
+    for band in ("MW", "FM", "NWR"):
+        band_rows = rows[rows["band"].fillna("").astype(str).str.upper().eq(band)]
+        if scoring_method == "Total receptions":
+            counts = band_rows.groupby("user_id").size()
+        else:
+            valid = band_rows[
+                band_rows[field].fillna("").astype(str).str.strip() != ""
+            ]
+            counts = valid.groupby("user_id")[field].nunique()
+        result[band] = result["user_id"].map(counts).fillna(0).astype(int)
+    return result[columns]

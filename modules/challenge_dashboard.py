@@ -17,6 +17,7 @@ from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.content import ordered_band_options
 from dxcore.metrics import (
     add_geography_keys,
+    challenge_band_scores,
     challenge_scores,
     normalize_county,
     valid_station_coordinates,
@@ -176,6 +177,13 @@ def _dxer_table(
 ) -> None:
     if scoring_method:
         table = challenge_scores(rows, scoring_method).rename(columns={"score": label})
+        table = table.merge(
+            challenge_band_scores(rows, scoring_method),
+            on="user_id",
+            how="left",
+        )
+        for band in ("MW", "FM", "NWR"):
+            table[band] = table[band].fillna(0).astype(int)
     else:
         valid = rows[rows[field].fillna("").astype(str).str.strip() != ""]
         table = valid.groupby("user_id")[field].nunique().reset_index(name=label)
@@ -187,18 +195,38 @@ def _dxer_table(
     table["Relative scale"] = table[label] / maximum * 100
     table.insert(0, "DXer", table["user_id"].map(lambda value: name_lookup.get(str(value), "DXer")))
     selection_version = int(st.session_state.get(f"{prefix}_selection_version", 0))
+    column_config: dict[str, object] = {
+        "Relative scale": st.column_config.ProgressColumn(
+            "Relative scale", min_value=0.0, max_value=100.0, format="%.0f%%"
+        )
+    }
+    if scoring_method:
+        column_config.update(
+            {
+                "MW": st.column_config.NumberColumn(
+                    "MW", help=f"{label} earned on MW", format="%d"
+                ),
+                "FM": st.column_config.NumberColumn(
+                    "FM", help=f"{label} earned on FM", format="%d"
+                ),
+                "NWR": st.column_config.NumberColumn(
+                    "NWR", help=f"{label} earned on NWR", format="%d"
+                ),
+            }
+        )
     event = st.dataframe(
         table.drop(columns=["user_id"]),
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
         key=f"{prefix}_{_token(label)}_table_{selection_version}",
-        column_config={
-            "Relative scale": st.column_config.ProgressColumn(
-                "Relative scale", min_value=0.0, max_value=100.0, format="%.0f%%"
-            )
-        },
+        column_config=column_config,
     )
+    if scoring_method:
+        st.caption(
+            "MW, FM, and NWR show each DXer's score contribution from that band; "
+            "the ranking column is their combined challenge total."
+        )
     st.caption("Select a DXer row to apply that DXer to the counters, map, and reception table.")
     _select_dxer(event, table, prefix, current_dxer)
 
