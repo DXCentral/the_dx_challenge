@@ -78,6 +78,7 @@ section = st.selectbox(
         "Announcements",
         "Challenges",
         "Support tickets",
+        "User locations",
         "Station review queue",
         "Station database",
     ],
@@ -359,6 +360,113 @@ elif section == "Support tickets":
                         st.session_state.admin_notice = message
                         st.rerun()
                     st.error(message)
+
+elif section == "User locations":
+    st.subheader("User locations")
+    st.caption(
+        "Correct a DXer's saved receiving location. Saving recalculates its grid and "
+        "every active reception distance tied to that location, then mirrors those "
+        "changes to the private Google Sheet. The location ID and bandscan are preserved."
+    )
+    users = store.users()
+    locations = store.all_locations()
+    if users.empty or locations.empty:
+        st.info("No saved user locations are available.")
+    else:
+        user_records = {
+            str(row["user_id"]): row for row in users.to_dict("records")
+        }
+        location_users = set(locations["user_id"].astype(str))
+        user_options = [value for value in user_records if value in location_users]
+        selected_user_id = st.selectbox(
+            "DXer",
+            user_options,
+            format_func=lambda value: (
+                f"{user_records[value]['display_name']} · {user_records[value]['email']}"
+            ),
+        )
+        user_locations = locations[
+            locations["user_id"].astype(str).eq(selected_user_id)
+        ].copy()
+        location_records = {
+            str(row["location_id"]): row
+            for row in user_locations.to_dict("records")
+        }
+        selected_location_id = st.selectbox(
+            "Saved location",
+            list(location_records),
+            format_func=lambda value: (
+                lambda row: (
+                    f"{row['label']} · {row['city']}, {row['region']}, {row['country']}"
+                    f"{' · Home QTH' if as_bool(row['is_home']) else ''}"
+                )
+            )(location_records[value]),
+        )
+        location = location_records[selected_location_id]
+        usage = store.location_usage(selected_user_id, selected_location_id)
+        with st.container(horizontal=True):
+            st.metric("Active receptions", f"{usage['logs']:,}", border=True)
+            st.metric("Bandscan entries", f"{usage['bandscan']:,}", border=True)
+            st.metric("Current grid", str(location["grid"] or "—"), border=True)
+        with st.form(f"admin_user_location_{selected_location_id}"):
+            columns = st.columns(2)
+            edit_label = columns[0].text_input(
+                "Location label", value=str(location["label"])
+            )
+            edit_city = columns[1].text_input("City", value=str(location["city"]))
+            columns = st.columns(2)
+            edit_region = columns[0].text_input(
+                "State / province / region", value=str(location["region"])
+            )
+            edit_country = columns[1].text_input(
+                "Country", value=str(location["country"])
+            )
+            columns = st.columns(2)
+            edit_latitude = columns[0].number_input(
+                "Latitude",
+                min_value=-90.0,
+                max_value=90.0,
+                value=float(location["latitude"]),
+                format="%.6f",
+            )
+            edit_longitude = columns[1].number_input(
+                "Longitude",
+                min_value=-180.0,
+                max_value=180.0,
+                value=float(location["longitude"]),
+                format="%.6f",
+            )
+            st.caption(
+                "The Maidenhead grid is recalculated from the corrected coordinates. "
+                "Paths, distance-based awards, filters, scoring, and leaderboards will "
+                "use the corrected location after this save."
+            )
+            confirmed = st.checkbox(
+                f"I confirm that these coordinates belong to {user_records[selected_user_id]['display_name']}."
+            )
+            save_location = st.form_submit_button(
+                "Save location and recalculate receptions",
+                icon=":material/edit_location:",
+                type="primary",
+            )
+        if save_location:
+            if not confirmed:
+                st.error("Confirm the DXer and coordinates before saving this correction.")
+                st.stop()
+            updated, message = store.update_location(
+                selected_user_id,
+                selected_location_id,
+                label=edit_label,
+                city=edit_city,
+                region=edit_region,
+                country=edit_country,
+                latitude=edit_latitude,
+                longitude=edit_longitude,
+            )
+            if updated:
+                st.session_state.admin_notice = message
+                st.rerun()
+            st.error(message)
 
 elif section == "Station review queue":
     st.subheader("Station review queue")

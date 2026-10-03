@@ -689,13 +689,17 @@ else:
     st.dataframe(summary)
 
 st.subheader("Filtered reception table")
+filtered_table = filtered.copy()
+filtered_table["DXer Name"] = filtered_table["user_id"].map(
+    lambda value: name_lookup.get(str(value), "DXer")
+)
 safe_columns = [
-    "reception_utc", "band", "frequency", "call", "station_city", "station_region",
+    "DXer Name", "reception_utc", "band", "frequency", "call", "station_city", "station_region",
     "station_country", "station_county", "station_grid", "distance_miles", "propagation",
     "is_sdr", "is_portable", "notes",
 ]
 st.dataframe(
-    display_log_table(filtered[safe_columns], st.session_state.user),
+    display_log_table(filtered_table[safe_columns], st.session_state.user),
     hide_index=True,
     key="stats_filtered_receptions",
 )

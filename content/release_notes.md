@@ -1,3 +1,10 @@
+### Version 1.0.0-rc10.16.9 · Administrator location corrections
+
+- Added an administrator-only User locations workspace for correcting any DXer's saved label, city, region, country, latitude, and longitude.
+- Recalculate the Maidenhead grid and every active reception distance tied to the corrected location while preserving its stable location ID and bandscan history.
+- Mirror the corrected location and affected Logging Entries to the environment's private Google Sheet using batched row updates for large logbooks.
+- Added DXer Name to the Stats page's Filtered reception table.
+
 ### Version 1.0.0-rc10.16.8 · Complete station-data acknowledgements
 
 - Expanded MW station-data credits to acknowledge Mesa Mike, Tim Tromp, Mike Jeziorski, Loyd Van Horn, and crowdsourced challenge observations.
