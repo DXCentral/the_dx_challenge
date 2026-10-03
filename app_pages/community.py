@@ -14,6 +14,7 @@ from app_support import (
     season_eligible_logs,
 )
 from dxcore.awards import award_milestones
+from dxcore.attribution import STATION_DATA_ATTRIBUTION
 from dxcore.config import APP_VERSION, CONTENT_DIR
 from dxcore.shoutouts import CATEGORY_PRESENTATION, media_filename, observed_categories
 
@@ -111,6 +112,16 @@ with st.container(border=True):
         width="content",
     )
     st.caption("User Guide Version 1.0 · PDF")
+
+with st.container(border=True):
+    st.subheader("Station data acknowledgements")
+    st.write(
+        "The station lists combine licensed databases, public information, personal "
+        "research, logbooks, and community observations. We gratefully acknowledge "
+        "the following sources and contributors."
+    )
+    for band in ("MW", "FM", "NWR"):
+        st.markdown(f"**{band}** — {STATION_DATA_ATTRIBUTION[band]}")
 
 with st.container(border=True):
     st.subheader("DXer shoutouts")

@@ -1,3 +1,17 @@
+### Version 1.0.0-rc10.16.8 · Complete station-data acknowledgements
+
+- Expanded MW station-data credits to acknowledge Mesa Mike, Tim Tromp, Mike Jeziorski, Loyd Van Horn, and crowdsourced challenge observations.
+- Expanded FM station-data credits to acknowledge the WTFDA Station Database, Loyd Van Horn's personal logs, and crowdsourced challenge observations.
+- Clarified that NWR station data come from publicly available NOAA Weather Radio information.
+- Added the complete acknowledgements to Community and reused the same wording in Station list and Station map views.
+
+### Version 1.0.0-rc10.16.7 · Mexican MW station expansion
+
+- Added 39 confirmed on-air Mexican AM stations from the contributed Mexican station log, bringing the managed Mexican MW list to 284 unique frequency/call combinations.
+- Added validated city-level latitude and longitude for every new station, reusing an existing database city coordinate where available and geocoding the remaining locations.
+- Refreshed slogan/network details for 202 existing Mexican stations while preserving every existing station's frequency, call, city, state, country, and coordinates so historical station IDs remain stable.
+- Excluded 28 source rows marked with uncertain on-air status from new-station creation; existing managed records were not removed.
+
 ### Version 1.0.0-rc10.16.6 · Band-scoped sprint qualification
 
 - Corrected multi-band sprint qualification so MW daypart restrictions apply only to MW receptions and FM/NWR propagation restrictions apply only to FM and NWR receptions.
