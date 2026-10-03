@@ -597,6 +597,95 @@ class LocalStore:
             "The receiving location was not found.",
         )
 
+    def update_location(
+        self,
+        user_id: str,
+        location_id: str,
+        *,
+        label: str,
+        city: str,
+        region: str,
+        country: str,
+        latitude: float,
+        longitude: float,
+    ) -> tuple[bool, str]:
+        """Correct a saved QTH and recalculate every active log using that QTH."""
+        cleaned_label = str(label).strip()
+        if not cleaned_label:
+            return False, "The location label cannot be blank."
+        if not valid_coordinates(latitude, longitude):
+            return False, "The corrected coordinates are invalid."
+        latitude = float(latitude)
+        longitude = float(longitude)
+        grid = latlon_to_grid(latitude, longitude)
+        recalculated = 0
+        skipped = 0
+        now = iso_utc()
+        with self.connect() as connection:
+            location = connection.execute(
+                "SELECT location_id FROM locations WHERE user_id=? AND location_id=?",
+                (user_id, location_id),
+            ).fetchone()
+            if location is None:
+                return False, "The receiving location was not found for that DXer."
+            connection.execute(
+                """
+                UPDATE locations
+                SET label=?, city=?, region=?, country=?, grid=?, latitude=?, longitude=?
+                WHERE user_id=? AND location_id=?
+                """,
+                (
+                    cleaned_label[:80],
+                    str(city).strip()[:120],
+                    str(region).strip()[:120],
+                    str(country).strip()[:120],
+                    grid,
+                    latitude,
+                    longitude,
+                    user_id,
+                    location_id,
+                ),
+            )
+            rows = connection.execute(
+                """
+                SELECT log_id, station_latitude, station_longitude
+                FROM logs
+                WHERE user_id=? AND location_id=? AND deleted_utc=''
+                """,
+                (user_id, location_id),
+            ).fetchall()
+            for row in rows:
+                if not valid_coordinates(row["station_latitude"], row["station_longitude"]):
+                    skipped += 1
+                    continue
+                distance = round(
+                    haversine_miles(
+                        latitude,
+                        longitude,
+                        float(row["station_latitude"]),
+                        float(row["station_longitude"]),
+                    ),
+                    1,
+                )
+                connection.execute(
+                    """
+                    UPDATE logs
+                    SET distance_miles=?, updated_utc=?, revision=revision+1
+                    WHERE log_id=?
+                    """,
+                    (distance, now, row["log_id"]),
+                )
+                recalculated += 1
+        message = (
+            f"Location updated and {recalculated:,} active reception distance(s) recalculated."
+        )
+        if skipped:
+            message += (
+                f" {skipped:,} reception(s) could not be recalculated because the stored "
+                "station coordinates are missing or invalid."
+            )
+        return True, message
+
     def set_home_location(self, user_id: str, location_id: str) -> None:
         with self.connect() as connection:
             connection.execute("UPDATE locations SET is_home=0 WHERE user_id=?", (user_id,))

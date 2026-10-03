@@ -130,19 +130,25 @@ class GoogleSheetMirror:
                 if str(value)
             }
             additions: list[list[object]] = []
+            updates: list[dict[str, object]] = []
             for record in rows:
                 row_id = str(record.get(key, "")).strip()
                 if not row_id:
                     continue
                 values = [_cell(record.get(column, "")) for column in columns]
                 if row_id in row_numbers:
-                    worksheet.update(
-                        range_name=f"A{row_numbers[row_id]}",
-                        values=[values],
-                        value_input_option="RAW",
+                    updates.append(
+                        {
+                            "range": f"A{row_numbers[row_id]}",
+                            "values": [values],
+                        }
                     )
                 else:
                     additions.append(values)
+            for start in range(0, len(updates), 200):
+                worksheet.batch_update(
+                    updates[start : start + 200], value_input_option="RAW"
+                )
             if additions:
                 worksheet.append_rows(additions, value_input_option="RAW")
 
@@ -341,6 +347,22 @@ class HybridStore:
         )
         if updated:
             self._sync_one("Locations", location_id)
+        return updated, message
+
+    def update_location(
+        self,
+        user_id: str,
+        location_id: str,
+        **values: object,
+    ) -> tuple[bool, str]:
+        updated, message = self.local.update_location(user_id, location_id, **values)
+        if updated:
+            self._sync_one("Locations", location_id)
+            affected = self.local.logs(user_id)
+            affected = affected[
+                affected["location_id"].astype(str).eq(str(location_id))
+            ]
+            self._sync("Logging Entries", affected.to_dict("records"))
         return updated, message
 
     def delete_location(self, user_id: str, location_id: str) -> tuple[bool, str]:
