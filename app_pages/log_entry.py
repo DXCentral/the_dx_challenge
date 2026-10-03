@@ -17,6 +17,7 @@ from app_support import (
     require_location,
     season_eligible_logs,
 )
+from dxcore.attribution import station_data_attribution
 from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_PROPAGATION_OPTIONS
@@ -390,15 +391,7 @@ if entry_mode in {"Station list", "Station map"}:
                 "logged": "History",
             }
         )
-        if band == "MW":
-            st.caption(
-                "Format, network/slogan, and FM parallel or identification notes "
-                "are provided courtesy of Tim Tromp."
-            )
-        elif band == "FM":
-            st.caption("FM format, slogan, and RDS PI code information is provided by the WTFDA station data.")
-        elif band == "NWR":
-            st.caption("Weather Forecast Office information is provided by the NOAA station data.")
+        st.caption(station_data_attribution(band))
         styled_view = view.style.apply(
             lambda row: [
                 "background-color: #BFE8D0; color: #123B26; font-weight: 600"
@@ -547,15 +540,9 @@ if entry_mode in {"Station list", "Station map"}:
             tooltip_html += "<br/><b>RDS PI code:</b> {rds_pi}"
         if band == "MW":
             tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}"
-            controls.caption(
-                "MW format, network/slogan, and FM parallel or identification notes "
-                "are provided courtesy of Tim Tromp."
-            )
-        elif band == "FM":
-            controls.caption("FM format, slogan, and RDS PI code information is provided by the WTFDA station data.")
         elif band == "NWR":
             tooltip_html += "<br/><b>Weather Forecast Office:</b> {wfo}"
-            controls.caption("Weather Forecast Office information is provided by the NOAA station data.")
+        controls.caption(station_data_attribution(band))
         selected_theme = THEMES.get(
             str(preferences.get("theme_name", "Midnight blue")),
             THEMES["Midnight blue"],
