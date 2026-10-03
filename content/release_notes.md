@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.16.10 · Per-band challenge leaderboard totals
+
+- Added MW, FM, and NWR columns to the Challenges page's primary DXer leaderboard.
+- Calculate each band column with the selected challenge's scoring method, including stations, states/provinces, countries, 4-character grids, counties/parishes, or total receptions.
+- Keep all three columns visible for single-band challenges, where unused bands display zero, so leaderboard layouts remain consistent from week to week.
+
 ### Version 1.0.0-rc10.16.9 · Administrator location corrections
 
 - Added an administrator-only User locations workspace for correcting any DXer's saved label, city, region, country, latitude, and longitude.
