@@ -113,37 +113,42 @@ def get_base_station_data() -> pd.DataFrame:
 
 
 def get_station_data() -> pd.DataFrame:
-    """Return licensed source lists plus administrator-approved station additions."""
+    """Return source lists plus admin corrections, excluding reversible removals."""
     base = get_base_station_data().copy()
-    overrides = get_store().station_overrides()
-    if overrides.empty:
-        return base
-    columns = [
-        "station_id", "band", "frequency", "call", "city", "region", "country",
-        "county", "grid", "latitude", "longitude",
-    ]
-    overrides = overrides[columns].copy()
-    metadata_columns = [
-        "format",
-        "network_slogan",
-        "station_notes",
-        "rds_pi",
-        "wfo",
-    ]
-    base_metadata = base.set_index("station_id")[metadata_columns]
-    for column in metadata_columns:
-        overrides[column] = (
-            overrides["station_id"].map(base_metadata[column]).fillna("")
+    store = get_store()
+    overrides = store.station_overrides()
+    if not overrides.empty:
+        columns = [
+            "station_id", "band", "frequency", "call", "city", "region", "country",
+            "county", "grid", "latitude", "longitude",
+        ]
+        overrides = overrides[columns].copy()
+        metadata_columns = [
+            "format",
+            "network_slogan",
+            "station_notes",
+            "rds_pi",
+            "wfo",
+        ]
+        base_metadata = base.set_index("station_id")[metadata_columns]
+        for column in metadata_columns:
+            overrides[column] = (
+                overrides["station_id"].map(base_metadata[column]).fillna("")
+            )
+        overrides["frequency"] = pd.to_numeric(overrides["frequency"], errors="coerce")
+        overrides["latitude"] = pd.to_numeric(overrides["latitude"], errors="coerce")
+        overrides["longitude"] = pd.to_numeric(overrides["longitude"], errors="coerce")
+        overrides = overrides.dropna(subset=["frequency", "latitude", "longitude"])
+        base = (
+            pd.concat([base, overrides], ignore_index=True)
+            .drop_duplicates("station_id", keep="last")
+            .reset_index(drop=True)
         )
-    overrides["frequency"] = pd.to_numeric(overrides["frequency"], errors="coerce")
-    overrides["latitude"] = pd.to_numeric(overrides["latitude"], errors="coerce")
-    overrides["longitude"] = pd.to_numeric(overrides["longitude"], errors="coerce")
-    overrides = overrides.dropna(subset=["frequency", "latitude", "longitude"])
-    return (
-        pd.concat([base, overrides], ignore_index=True)
-        .drop_duplicates("station_id", keep="last")
-        .reset_index(drop=True)
-    )
+    removals = store.station_removals(active_only=True)
+    if not removals.empty:
+        removed_ids = set(removals["station_id"].astype(str))
+        base = base[~base["station_id"].astype(str).isin(removed_ids)].copy()
+    return base.reset_index(drop=True)
 
 
 def community_shoutout_config() -> tuple[str, str]:

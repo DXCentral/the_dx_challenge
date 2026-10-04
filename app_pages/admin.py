@@ -688,8 +688,67 @@ else:
     st.subheader("Station database")
     st.caption(
         "Search the combined Season 7 station lists and save a managed correction. "
-        "The source CSV remains unchanged; the private Station Overrides tab becomes the authoritative record."
+        "The source CSV remains unchanged; private Station Overrides and Station Removals "
+        "tabs become the authoritative administrative records."
     )
+    removal_history = store.station_removals()
+    if not removal_history.empty:
+        with st.expander(
+            f"Removed station listings ({int(removal_history['active'].map(as_bool).sum()):,} active)",
+            icon=":material/inventory_2:",
+        ):
+            archived = removal_history.copy()
+            archived.insert(
+                0,
+                "Status",
+                archived["active"].map(
+                    lambda value: "Removed" if as_bool(value) else "Restored"
+                ),
+            )
+            st.caption(
+                "This is the retained audit record. Restoring a listing makes it available "
+                "again but does not reverse reception records that were previously reassigned."
+            )
+            st.dataframe(
+                archived[
+                    [
+                        "Status", "station_id", "band", "frequency", "call", "city",
+                        "region", "country", "county", "grid", "latitude", "longitude",
+                        "format", "network_slogan", "station_notes", "rds_pi", "wfo",
+                        "replacement_station_id", "replacement_call", "reason",
+                        "removed_utc", "restored_utc", "updated_utc",
+                    ]
+                ],
+                hide_index=True,
+            )
+            active_removals = removal_history[
+                removal_history["active"].map(as_bool)
+            ]
+            if not active_removals.empty:
+                removal_records = {
+                    str(row["station_id"]): row
+                    for row in active_removals.to_dict("records")
+                }
+                restore_id = st.selectbox(
+                    "Removed listing to restore",
+                    list(removal_records),
+                    format_func=lambda value: (
+                        lambda row: (
+                            f"{row['band']} · {float(row['frequency']):g} · {row['call']} · "
+                            f"{row['city']}, {row['region']}, {row['country']}"
+                        )
+                    )(removal_records[value]),
+                )
+                if st.button(
+                    "Restore station listing",
+                    icon=":material/settings_backup_restore:",
+                    key="admin_restore_station_listing",
+                ):
+                    restored, message = store.restore_station(restore_id)
+                    if restored:
+                        st.session_state.admin_notice = message
+                        st.rerun()
+                    st.error(message)
     station_data = get_station_data()
     managed_ids = set(store.station_overrides()["station_id"].astype(str))
     filters = st.columns(4)
@@ -823,4 +882,118 @@ else:
                 "Station override",
                 selected_station_id,
                 f"{station['call']} on {station['frequency']}",
+            )
+
+        st.divider()
+        st.markdown("**Remove or merge this station listing**")
+        active_logs = store.logs()
+        source_log_count = int(
+            active_logs["station_id"].astype(str).eq(selected_station_id).sum()
+        )
+        if source_log_count:
+            st.warning(
+                f"This listing is tied to {source_log_count:,} active reception(s). "
+                "Choose the correct replacement listing before removing it. Those "
+                "records will retain their reception details but use the replacement "
+                "station ID and station metadata.",
+                icon=":material/merge:",
+            )
+        else:
+            st.caption(
+                "This listing has no active receptions. It can be removed without a replacement."
+            )
+        source_band = str(station["band"]).upper()
+        source_frequency = float(station["frequency"])
+        tolerance = 0.1 if source_band == "MW" else 0.001
+        replacement_rows = station_data[
+            station_data["band"].astype(str).str.upper().eq(source_band)
+            & (
+                pd.to_numeric(station_data["frequency"], errors="coerce")
+                .sub(source_frequency)
+                .abs()
+                < tolerance
+            )
+            & ~station_data["station_id"].astype(str).eq(selected_station_id)
+        ].copy()
+        replacement_rows["same_call"] = replacement_rows["call"].astype(str).str.casefold().eq(
+            str(station["call"]).casefold()
+        )
+        replacement_rows = replacement_rows.sort_values(
+            ["same_call", "call", "city", "region"],
+            ascending=[False, True, True, True],
+        )
+        replacement_records = {
+            str(row["station_id"]): row
+            for row in replacement_rows.to_dict("records")
+        }
+        replacement_options = list(replacement_records)
+        if not source_log_count:
+            replacement_options.insert(0, "__NONE__")
+        if replacement_options:
+            replacement_choice = st.selectbox(
+                "Replacement station",
+                replacement_options,
+                index=None,
+                placeholder=(
+                    "Choose the listing that should receive existing logs"
+                    if source_log_count
+                    else "Choose a replacement or remove without one"
+                ),
+                format_func=lambda value: (
+                    "No replacement — archive this listing only"
+                    if value == "__NONE__"
+                    else (
+                        lambda row: (
+                            f"{row['call']} · {float(row['frequency']):g} · "
+                            f"{row['city']}, {row['region']}, {row['country']}"
+                            + (
+                                f" · {row['network_slogan']}"
+                                if str(row.get("network_slogan", "")).strip()
+                                else ""
+                            )
+                        )
+                    )(replacement_records[value])
+                ),
+                key=f"admin_station_replacement_{selected_station_id}",
+            )
+            with st.form(f"admin_remove_station_{selected_station_id}"):
+                removal_reason = st.text_area(
+                    "Removal reason",
+                    value="Duplicate station listing",
+                    max_chars=1000,
+                )
+                removal_confirmed = st.checkbox(
+                    "I confirm that this is the listing to remove and that the replacement, if selected, is correct."
+                )
+                remove_station = st.form_submit_button(
+                    "Remove and archive station listing",
+                    icon=":material/archive:",
+                    type="primary",
+                )
+            if remove_station:
+                if not removal_confirmed:
+                    st.error("Confirm the station removal before saving.")
+                    st.stop()
+                if replacement_choice is None:
+                    st.error("Choose a replacement option before removing this listing.")
+                    st.stop()
+                replacement = (
+                    None
+                    if replacement_choice == "__NONE__"
+                    else replacement_records[replacement_choice]
+                )
+                removed, message, _ = store.remove_station(
+                    station,
+                    replacement=replacement,
+                    reason=removal_reason,
+                )
+                if removed:
+                    st.session_state.admin_notice = message
+                    st.rerun()
+                st.error(message)
+        else:
+            st.warning(
+                "No active station on the same band and frequency is available as a "
+                "replacement. Correct or add the intended replacement first.",
+                icon=":material/error:",
             )
