@@ -25,6 +25,7 @@ SHEET_TABLES = {
     "Import Batches": "import_batches",
     "Import Review": "import_review",
     "Station Overrides": "station_overrides",
+    "Station Removals": "station_removals",
     "Announcements": "announcements",
     "Challenges": "challenges",
     "Support Tickets": "support_tickets",
@@ -220,6 +221,31 @@ class LocalStore:
                     longitude REAL NOT NULL,
                     source_log_id TEXT NOT NULL,
                     approved_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS station_removals (
+                    station_id TEXT PRIMARY KEY,
+                    band TEXT NOT NULL,
+                    frequency REAL NOT NULL,
+                    call TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    country TEXT NOT NULL,
+                    county TEXT NOT NULL,
+                    grid TEXT NOT NULL,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    format TEXT NOT NULL,
+                    network_slogan TEXT NOT NULL,
+                    station_notes TEXT NOT NULL,
+                    rds_pi TEXT NOT NULL,
+                    wfo TEXT NOT NULL,
+                    replacement_station_id TEXT NOT NULL,
+                    replacement_call TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    removed_utc TEXT NOT NULL,
+                    restored_utc TEXT NOT NULL DEFAULT '',
                     updated_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS shoutout_status (
@@ -1235,6 +1261,241 @@ class LocalStore:
                 "SELECT * FROM station_overrides ORDER BY band, frequency, call",
                 connection,
             )
+
+    def station_removals(self, *, active_only: bool = False) -> pd.DataFrame:
+        query = "SELECT * FROM station_removals"
+        if active_only:
+            query += " WHERE active=1"
+        query += " ORDER BY active DESC, updated_utc DESC, band, frequency, call"
+        with self.connect() as connection:
+            return pd.read_sql_query(query, connection)
+
+    def _reassign_station_logs(
+        self,
+        connection: sqlite3.Connection,
+        source_station_id: str,
+        target: dict[str, object],
+    ) -> list[str]:
+        rows = connection.execute(
+            """
+            SELECT l.*, q.latitude AS qth_latitude, q.longitude AS qth_longitude
+            FROM logs l
+            LEFT JOIN locations q ON q.location_id=l.location_id
+            WHERE l.station_id=? AND l.deleted_utc=''
+            """,
+            (source_station_id,),
+        ).fetchall()
+        changed_ids: list[str] = []
+        latitude = float(target["latitude"])
+        longitude = float(target["longitude"])
+        now = iso_utc()
+        for row in rows:
+            distance: float | str = row["distance_miles"]
+            if valid_coordinates(row["qth_latitude"], row["qth_longitude"]):
+                distance = round(
+                    haversine_miles(
+                        float(row["qth_latitude"]),
+                        float(row["qth_longitude"]),
+                        latitude,
+                        longitude,
+                    ),
+                    1,
+                )
+            connection.execute(
+                """
+                UPDATE logs SET
+                    station_id=?, band=?, frequency=?, call=?, station_city=?,
+                    station_region=?, station_country=?, station_county=?,
+                    station_grid=?, station_latitude=?, station_longitude=?,
+                    distance_miles=?, updated_utc=?, revision=revision+1
+                WHERE log_id=?
+                """,
+                (
+                    str(target["station_id"]),
+                    str(target["band"]).upper(),
+                    float(target["frequency"]),
+                    str(target["call"]).strip(),
+                    str(target["city"]).strip(),
+                    str(target.get("region", "")).strip(),
+                    str(target["country"]).strip(),
+                    str(target.get("county", "")).strip(),
+                    str(target.get("grid", "")).strip().upper(),
+                    latitude,
+                    longitude,
+                    distance,
+                    now,
+                    row["log_id"],
+                ),
+            )
+            changed_ids.append(str(row["log_id"]))
+        return changed_ids
+
+    def remove_station(
+        self,
+        station: dict[str, object],
+        *,
+        replacement: dict[str, object] | None = None,
+        reason: str = "",
+    ) -> tuple[bool, str, list[str]]:
+        """Suppress a station without deleting its source record or audit snapshot."""
+        station_id = str(station.get("station_id", "")).strip()
+        band = str(station.get("band", "")).strip().upper()
+        required = [
+            station_id,
+            band,
+            str(station.get("call", "")).strip(),
+            str(station.get("city", "")).strip(),
+            str(station.get("country", "")).strip(),
+        ]
+        if any(not value for value in required):
+            return False, "The station snapshot is incomplete and cannot be removed.", []
+        try:
+            frequency = float(station.get("frequency", ""))
+            latitude = float(station.get("latitude", ""))
+            longitude = float(station.get("longitude", ""))
+        except (TypeError, ValueError):
+            return False, "The station snapshot has invalid numeric data.", []
+        if not valid_coordinates(latitude, longitude):
+            return False, "The station snapshot has invalid coordinates.", []
+
+        replacement_id = ""
+        replacement_call = ""
+        normalized_replacement: dict[str, object] | None = None
+        if replacement is not None:
+            replacement_id = str(replacement.get("station_id", "")).strip()
+            if not replacement_id or replacement_id == station_id:
+                return False, "Choose a different replacement station.", []
+            replacement_band = str(replacement.get("band", "")).strip().upper()
+            try:
+                replacement_frequency = float(replacement.get("frequency", ""))
+                replacement_latitude = float(replacement.get("latitude", ""))
+                replacement_longitude = float(replacement.get("longitude", ""))
+            except (TypeError, ValueError):
+                return False, "The replacement station has invalid numeric data.", []
+            tolerance = 0.1 if band == "MW" else 0.001
+            if replacement_band != band or abs(replacement_frequency - frequency) >= tolerance:
+                return False, "The replacement must use the same band and frequency.", []
+            if not valid_coordinates(replacement_latitude, replacement_longitude):
+                return False, "The replacement station has invalid coordinates.", []
+            if any(
+                not str(replacement.get(field, "")).strip()
+                for field in ("call", "city", "country")
+            ):
+                return False, "The replacement station snapshot is incomplete.", []
+            normalized_replacement = {
+                **replacement,
+                "station_id": replacement_id,
+                "band": replacement_band,
+                "frequency": replacement_frequency,
+                "latitude": replacement_latitude,
+                "longitude": replacement_longitude,
+            }
+            replacement_call = str(replacement.get("call", "")).strip()
+
+        now = iso_utc()
+        with self.connect() as connection:
+            already_removed = connection.execute(
+                "SELECT active FROM station_removals WHERE station_id=?",
+                (station_id,),
+            ).fetchone()
+            if already_removed is not None and int(already_removed["active"]) == 1:
+                return False, "That station listing is already removed.", []
+            if replacement_id:
+                target_removed = connection.execute(
+                    "SELECT active FROM station_removals WHERE station_id=?",
+                    (replacement_id,),
+                ).fetchone()
+                if target_removed is not None and int(target_removed["active"]) == 1:
+                    return False, "The selected replacement station is also removed.", []
+            log_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM logs WHERE station_id=? AND deleted_utc=''",
+                    (station_id,),
+                ).fetchone()[0]
+            )
+            if log_count and normalized_replacement is None:
+                return (
+                    False,
+                    f"This listing has {log_count:,} active reception(s). Choose a replacement before removing it.",
+                    [],
+                )
+            changed_logs = (
+                self._reassign_station_logs(
+                    connection, station_id, normalized_replacement
+                )
+                if normalized_replacement is not None
+                else []
+            )
+            snapshot = {
+                "station_id": station_id,
+                "band": band,
+                "frequency": frequency,
+                "call": str(station.get("call", "")).strip(),
+                "city": str(station.get("city", "")).strip(),
+                "region": str(station.get("region", "")).strip(),
+                "country": str(station.get("country", "")).strip(),
+                "county": str(station.get("county", "")).strip(),
+                "grid": str(station.get("grid", "")).strip().upper(),
+                "latitude": latitude,
+                "longitude": longitude,
+                "format": str(station.get("format", "")).strip(),
+                "network_slogan": str(station.get("network_slogan", "")).strip(),
+                "station_notes": str(station.get("station_notes", "")).strip(),
+                "rds_pi": str(station.get("rds_pi", "")).strip(),
+                "wfo": str(station.get("wfo", "")).strip(),
+                "replacement_station_id": replacement_id,
+                "replacement_call": replacement_call,
+                "reason": str(reason).strip()[:1000],
+                "active": 1,
+                "removed_utc": now,
+                "restored_utc": "",
+                "updated_utc": now,
+            }
+            columns = SHEET_SCHEMAS["Station Removals"]
+            connection.execute(
+                f"""
+                INSERT INTO station_removals({','.join(columns)})
+                VALUES ({','.join('?' for _ in columns)})
+                ON CONFLICT(station_id) DO UPDATE SET
+                    band=excluded.band, frequency=excluded.frequency,
+                    call=excluded.call, city=excluded.city, region=excluded.region,
+                    country=excluded.country, county=excluded.county, grid=excluded.grid,
+                    latitude=excluded.latitude, longitude=excluded.longitude,
+                    format=excluded.format, network_slogan=excluded.network_slogan,
+                    station_notes=excluded.station_notes, rds_pi=excluded.rds_pi,
+                    wfo=excluded.wfo,
+                    replacement_station_id=excluded.replacement_station_id,
+                    replacement_call=excluded.replacement_call, reason=excluded.reason,
+                    active=1, removed_utc=excluded.removed_utc, restored_utc='',
+                    updated_utc=excluded.updated_utc
+                """,
+                tuple(snapshot[column] for column in columns),
+            )
+        suffix = (
+            f" Reassigned {len(changed_logs):,} active reception(s) to {replacement_call}."
+            if changed_logs
+            else ""
+        )
+        return True, f"Station listing removed and archived.{suffix}", changed_logs
+
+    def restore_station(self, station_id: str) -> tuple[bool, str]:
+        cleaned_id = str(station_id).strip()
+        if not cleaned_id:
+            return False, "Choose a removed station to restore."
+        now = iso_utc()
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE station_removals
+                SET active=0, restored_utc=?, updated_utc=?
+                WHERE station_id=? AND active=1
+                """,
+                (now, now, cleaned_id),
+            )
+        return (True, "Station listing restored to the active database.") if result.rowcount == 1 else (
+            False,
+            "The station removal record was not found or is already restored.",
+        )
 
     @staticmethod
     def _station_value_changed(old: object, new: object, numeric: bool = False) -> bool:

@@ -104,8 +104,8 @@ read-on-air flags; the published WPForms response feed remains read-only.
    only, preserve the header row but clear the data rows from **Users**, **Locations**,
    **Logging Entries**, **Bandscan**, **Import Batches**, **Import Review**, **Support
    Tickets**, and **Shoutout Status**. Keep **Challenges**, **Announcements**, and
-   reviewed **Station Overrides** so production retains the approved operating
-   configuration. Put only this copied Sheet's ID in production Secrets.
+reviewed **Station Overrides** and **Station Removals** so production retains the
+approved operating configuration. Put only this copied Sheet's ID in production Secrets.
 6. Reboot both apps and confirm their app bars say **Staging** and **Production** and
    show different final eight characters for their private Sheet IDs.
 

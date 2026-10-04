@@ -19,6 +19,7 @@ ENVIRONMENT_CONFIGURATION_SHEETS = {
     "Announcements",
     "Challenges",
     "Station Overrides",
+    "Station Removals",
 }
 LOGGER = logging.getLogger(__name__)
 
@@ -485,6 +486,40 @@ class HybridStore:
                 LOGGER.exception("Google Sheet station override delete failed")
                 self.sync_error = f"{type(error).__name__}: {error}"
         return deleted, message
+
+    def remove_station(
+        self,
+        station: dict[str, object],
+        *,
+        replacement: dict[str, object] | None = None,
+        reason: str = "",
+    ) -> tuple[bool, str, list[str]]:
+        removed, message, changed_log_ids = self.local.remove_station(
+            station,
+            replacement=replacement,
+            reason=reason,
+        )
+        if removed:
+            station_id = str(station.get("station_id", "")).strip()
+            self._sync_one("Station Removals", station_id)
+            self._sync(
+                "Logging Entries",
+                [
+                    record
+                    for log_id in changed_log_ids
+                    if (
+                        record := self.local.sheet_row("Logging Entries", log_id)
+                    )
+                    is not None
+                ],
+            )
+        return removed, message, changed_log_ids
+
+    def restore_station(self, station_id: str) -> tuple[bool, str]:
+        restored, message = self.local.restore_station(station_id)
+        if restored:
+            self._sync_one("Station Removals", station_id)
+        return restored, message
 
     def record_import_batch(self, **values: object) -> None:
         self.local.record_import_batch(**values)

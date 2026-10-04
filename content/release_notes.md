@@ -1,3 +1,10 @@
+### Version 1.0.0-rc10.16.11 · Reversible station removal and log merge
+
+- Added an administrator-only workflow to remove duplicate or invalid station listings without modifying or deleting the source CSV record.
+- Preserve every removed station's complete metadata, reason, replacement, timestamps, and active/restored status in an environment-specific Station Removals Sheet tab.
+- Require a same-band, same-frequency replacement when active receptions use the removed listing, then reassign those logs to the retained station and recalculate their distances.
+- Added a retained removal-history table and Restore station listing action; restoration reactivates the listing without erasing the audit trail.
+
 ### Version 1.0.0-rc10.16.10 · Per-band challenge leaderboard totals
 
 - Added MW, FM, and NWR columns to the Challenges page's primary DXer leaderboard.
