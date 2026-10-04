@@ -84,7 +84,8 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
     ],
     "Station Overrides": [
         "station_id", "band", "frequency", "call", "city", "region", "country",
-        "county", "grid", "latitude", "longitude", "source_log_id",
+        "county", "grid", "latitude", "longitude", "format", "network_slogan",
+        "station_notes", "rds_pi", "wfo", "metadata_managed", "source_log_id",
         "approved_utc", "updated_utc",
     ],
     "Station Removals": [

@@ -801,7 +801,9 @@ else:
             visible[
                 [
                     "band", "frequency", "call", "city", "region", "country",
-                    "county", "grid", "latitude", "longitude", "Managed correction",
+                    "county", "grid", "latitude", "longitude", "format",
+                    "network_slogan", "station_notes", "rds_pi", "wfo",
+                    "Managed correction",
                 ]
             ],
             hide_index=True,
@@ -851,6 +853,34 @@ else:
                 "Longitude", min_value=-180.0, max_value=180.0,
                 value=float(station["longitude"]), format="%.6f"
             )
+            st.markdown("**Station identification details**")
+            columns = st.columns(2)
+            edit_format = columns[0].text_input(
+                "Format",
+                value=str(station.get("format", "")),
+                help="Examples: News/Talk, Country, Regional Mexican, or Adult Contemporary.",
+            )
+            edit_network_slogan = columns[1].text_input(
+                "Network / slogan",
+                value=str(station.get("network_slogan", "")),
+                help="The station network, branding, slogan, or commonly heard on-air identity.",
+            )
+            columns = st.columns(2)
+            edit_rds_pi = columns[0].text_input(
+                "RDS PI code",
+                value=str(station.get("rds_pi", "")),
+                help="Primarily used for FM stations. Leave blank when it does not apply.",
+            )
+            edit_wfo = columns[1].text_input(
+                "Weather Forecast Office",
+                value=str(station.get("wfo", "")),
+                help="Primarily used for NWR transmitters. Leave blank when it does not apply.",
+            )
+            edit_station_notes = st.text_area(
+                "Station notes / simulcasts",
+                value=str(station.get("station_notes", "")),
+                help="Identification notes, FM translators or simulcasts, network details, and other useful clues.",
+            )
             save_station = st.form_submit_button(
                 "Save station correction", icon=":material/save:", type="primary"
             )
@@ -868,6 +898,11 @@ else:
                     "grid": edit_grid,
                     "latitude": edit_latitude,
                     "longitude": edit_longitude,
+                    "format": edit_format,
+                    "network_slogan": edit_network_slogan,
+                    "station_notes": edit_station_notes,
+                    "rds_pi": edit_rds_pi,
+                    "wfo": edit_wfo,
                     "source_log_id": "admin",
                 }
             )
