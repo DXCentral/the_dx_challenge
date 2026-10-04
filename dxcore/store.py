@@ -219,6 +219,12 @@ class LocalStore:
                     grid TEXT NOT NULL,
                     latitude REAL NOT NULL,
                     longitude REAL NOT NULL,
+                    format TEXT NOT NULL DEFAULT '',
+                    network_slogan TEXT NOT NULL DEFAULT '',
+                    station_notes TEXT NOT NULL DEFAULT '',
+                    rds_pi TEXT NOT NULL DEFAULT '',
+                    wfo TEXT NOT NULL DEFAULT '',
+                    metadata_managed INTEGER NOT NULL DEFAULT 0,
                     source_log_id TEXT NOT NULL,
                     approved_utc TEXT NOT NULL,
                     updated_utc TEXT NOT NULL
@@ -304,6 +310,24 @@ class LocalStore:
                 if column not in existing_ticket_columns:
                     connection.execute(
                         f"ALTER TABLE support_tickets ADD COLUMN {column} {definition}"
+                    )
+            existing_station_override_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(station_overrides)"
+                ).fetchall()
+            }
+            for column, definition in {
+                "format": "TEXT NOT NULL DEFAULT ''",
+                "network_slogan": "TEXT NOT NULL DEFAULT ''",
+                "station_notes": "TEXT NOT NULL DEFAULT ''",
+                "rds_pi": "TEXT NOT NULL DEFAULT ''",
+                "wfo": "TEXT NOT NULL DEFAULT ''",
+                "metadata_managed": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if column not in existing_station_override_columns:
+                    connection.execute(
+                        f"ALTER TABLE station_overrides ADD COLUMN {column} {definition}"
                     )
             legacy_nwr_ids = [
                 row[0]
@@ -1609,13 +1633,18 @@ class LocalStore:
                 """
                 INSERT INTO station_overrides(
                     station_id,band,frequency,call,city,region,country,county,grid,
-                    latitude,longitude,source_log_id,approved_utc,updated_utc
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    latitude,longitude,format,network_slogan,station_notes,rds_pi,wfo,
+                    metadata_managed,source_log_id,approved_utc,updated_utc
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(station_id) DO UPDATE SET
                     band=excluded.band, frequency=excluded.frequency, call=excluded.call,
                     city=excluded.city, region=excluded.region, country=excluded.country,
                     county=excluded.county, grid=excluded.grid, latitude=excluded.latitude,
-                    longitude=excluded.longitude, updated_utc=excluded.updated_utc
+                    longitude=excluded.longitude, format=excluded.format,
+                    network_slogan=excluded.network_slogan,
+                    station_notes=excluded.station_notes, rds_pi=excluded.rds_pi,
+                    wfo=excluded.wfo, metadata_managed=1,
+                    updated_utc=excluded.updated_utc
                 """,
                 (
                     station_id,
@@ -1629,6 +1658,12 @@ class LocalStore:
                     grid,
                     latitude,
                     longitude,
+                    str(values.get("format", "")).strip(),
+                    str(values.get("network_slogan", "")).strip(),
+                    str(values.get("station_notes", "")).strip(),
+                    str(values.get("rds_pi", "")).strip().upper(),
+                    str(values.get("wfo", "")).strip(),
+                    1,
                     str(values.get("source_log_id", "")).strip()
                     or (str(existing["source_log_id"]) if existing else "admin"),
                     str(existing["approved_utc"]) if existing else now,
@@ -1692,8 +1727,9 @@ class LocalStore:
                 """
                 INSERT INTO station_overrides(
                     station_id,band,frequency,call,city,region,country,county,grid,
-                    latitude,longitude,source_log_id,approved_utc,updated_utc
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    latitude,longitude,format,network_slogan,station_notes,rds_pi,wfo,
+                    metadata_managed,source_log_id,approved_utc,updated_utc
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(station_id) DO UPDATE SET
                     band=excluded.band, frequency=excluded.frequency, call=excluded.call,
                     city=excluded.city, region=excluded.region, country=excluded.country,
@@ -1704,7 +1740,8 @@ class LocalStore:
                 (
                     row["station_id"], row["band"], float(row["frequency"]), row["call"],
                     row["station_city"], row["station_region"], row["station_country"],
-                    row["station_county"], grid, latitude, longitude, log_id,
+                    row["station_county"], grid, latitude, longitude,
+                    "", "", "", "", "", 0, log_id,
                     existing["approved_utc"] if existing else now, now,
                 ),
             )

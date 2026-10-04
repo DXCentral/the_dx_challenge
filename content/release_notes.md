@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.16.12 · Editable station identification details
+
+- Extend the administrator station editor to update format, network/slogan, identification notes and simulcasts, FM RDS PI code, and NWR Weather Forecast Office.
+- Store those edits durably in the environment-specific Station Overrides Sheet tab so the corrected details appear in station lists and Station Map hover information.
+- Preserve source-list identification details for existing legacy overrides until an administrator explicitly manages those fields, while allowing a new edit to intentionally clear incorrect metadata.
+
 ### Version 1.0.0-rc10.16.11 · Reversible station removal and log merge
 
 - Added an administrator-only workflow to remove duplicate or invalid station listings without modifying or deleting the source CSV record.

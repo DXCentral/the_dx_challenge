@@ -120,7 +120,9 @@ def get_station_data() -> pd.DataFrame:
     if not overrides.empty:
         columns = [
             "station_id", "band", "frequency", "call", "city", "region", "country",
-            "county", "grid", "latitude", "longitude",
+            "county", "grid", "latitude", "longitude", "format",
+            "network_slogan", "station_notes", "rds_pi", "wfo",
+            "metadata_managed",
         ]
         overrides = overrides[columns].copy()
         metadata_columns = [
@@ -131,10 +133,19 @@ def get_station_data() -> pd.DataFrame:
             "wfo",
         ]
         base_metadata = base.set_index("station_id")[metadata_columns]
+        managed_metadata = (
+            overrides["metadata_managed"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin({"1", "true", "yes", "on"})
+        )
         for column in metadata_columns:
-            overrides[column] = (
-                overrides["station_id"].map(base_metadata[column]).fillna("")
+            inherited = overrides["station_id"].map(base_metadata[column]).fillna("")
+            overrides[column] = overrides[column].where(
+                managed_metadata, inherited
             )
+        overrides = overrides.drop(columns=["metadata_managed"])
         overrides["frequency"] = pd.to_numeric(overrides["frequency"], errors="coerce")
         overrides["latitude"] = pd.to_numeric(overrides["latitude"], errors="coerce")
         overrides["longitude"] = pd.to_numeric(overrides["longitude"], errors="coerce")
