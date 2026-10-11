@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.16.13 · Challenge-scoped station history
+
+- Make Station list and Station Map history highlights use only the DXer's receptions that qualify for the selected active sprint while Active challenge filter is enabled.
+- Apply the sprint's complete saved rules—including date/time, band, frequency, geography, distance, and propagation—to the highlighted station history and last-heard details.
+- Restore normal season history immediately when the challenge filter is turned off, with clear challenge-specific status labels while it is active.
+
 ### Version 1.0.0-rc10.16.12 · Editable station identification details
 
 - Extend the administrator station editor to update format, network/slogan, identification notes and simulcasts, FM RDS PI code, and NWR Weather Forecast Office.
