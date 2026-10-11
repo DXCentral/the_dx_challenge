@@ -18,7 +18,11 @@ from app_support import (
     season_eligible_logs,
 )
 from dxcore.attribution import station_data_attribution
-from dxcore.content import allowed_challenge_frequencies, station_qualifies_for_challenge
+from dxcore.content import (
+    allowed_challenge_frequencies,
+    logs_qualifying_for_challenges,
+    station_qualifies_for_challenge,
+)
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_PROPAGATION_OPTIONS
 from dxcore.presentation import (
@@ -191,7 +195,11 @@ if active_sprints:
             "Active challenge filter",
             value=False,
             key=f"log_challenge_only_{band}",
-            help="When enabled, the frequency and station list move to the selected active challenge. Turn it off at any time to log other DX.",
+            help=(
+                "When enabled, the frequency and station list move to the selected active "
+                "challenge. Station history highlights also show only receptions that qualify "
+                "for that sprint. Turn it off at any time to restore normal logging and history."
+            ),
         )
 frequency_key = f"log_frequency_{band}"
 challenge_frequencies: list[float] = []
@@ -292,7 +300,23 @@ if entry_mode in {"Station list", "Station map"}:
                 axis=1,
             )
         ].reset_index(drop=True)
-    existing = season_eligible_logs(store.logs(user_id))
+    all_user_logs = store.logs(user_id)
+    if challenge_filter and focused_challenge is not None:
+        existing = logs_qualifying_for_challenges(
+            all_user_logs, [focused_challenge]
+        )
+        history_logged_label = "Logged in current challenge"
+        history_unlogged_label = "Not logged in current challenge"
+        last_heard_heading = "Last heard in challenge"
+        controls.caption(
+            "Station-history highlights now include only your qualifying receptions "
+            f"during {focused_challenge['name']}."
+        )
+    else:
+        existing = season_eligible_logs(all_user_logs)
+        history_logged_label = "Previously logged"
+        history_unlogged_label = "New / unlogged"
+        last_heard_heading = "Last heard"
     heard_ids = set(existing["station_id"]) if not existing.empty else set()
     if matches.empty:
         message = "No stations match this frequency and distance range."
@@ -345,7 +369,9 @@ if entry_mode in {"Station list", "Station map"}:
                 "Use the station filters to narrow the full database by call, location, county, or grid."
             )
 
-        table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map({True: "Previously logged", False: "New"})
+        table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map(
+            {True: history_logged_label, False: history_unlogged_label}
+        )
         distance_label = distance_column_label(preferences)
         view_columns = ["frequency", "call", "city", "region", "country"]
         if band in {"MW", "FM"}:
@@ -395,7 +421,7 @@ if entry_mode in {"Station list", "Station map"}:
         styled_view = view.style.apply(
             lambda row: [
                 "background-color: #BFE8D0; color: #123B26; font-weight: 600"
-                if row["History"] == "Previously logged"
+                if row["History"] == history_logged_label
                 else ""
             ] * len(row),
             axis=1,
@@ -456,7 +482,7 @@ if entry_mode in {"Station list", "Station map"}:
             return html.escape(str(value).strip())
 
         map_matches["history_label"] = map_matches["station_id"].isin(heard_ids).map(
-            {True: "Previously logged", False: "New / unlogged"}
+            {True: history_logged_label, False: history_unlogged_label}
         )
         map_matches["marker_color"] = map_matches["station_id"].isin(heard_ids).map(
             {True: [0, 190, 230, 235], False: [255, 145, 0, 235]}
@@ -525,7 +551,7 @@ if entry_mode in {"Station list", "Station map"}:
             "<b>Grid:</b> {grid}<br/>"
             "<b>Distance:</b> {distance_label}<br/>"
             "<b>Status:</b> {history_label}<br/>"
-            "<b>Last heard:</b> {last_heard_label}"
+            f"<b>{last_heard_heading}:</b> {{last_heard_label}}"
         )
         if band in {"MW", "FM"}:
             tooltip_html += (
@@ -780,7 +806,10 @@ if entry_mode in {"Station list", "Station map"}:
                 )
             )
         map_target = workspace_map if workspace_active else st
-        map_target.markdown(":orange-badge[New / unlogged] :blue-badge[Previously logged]")
+        map_target.markdown(
+            f":orange-badge[{history_unlogged_label}] "
+            f":blue-badge[{history_logged_label}]"
+        )
         map_target.caption(
             "State and province borders are shown for the United States, Canada, and Mexico. "
             + overlay_caption
