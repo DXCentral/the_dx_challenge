@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.16.17 · Clearer earlier-reception entry
+
+- Rename the Log Entry timing choice from From recording to Earlier reception so it also clearly covers mobile, portable, and other DX sessions entered afterward.
+- Add guidance to enter the original UTC date and time for any earlier reception, whether or not it came from a recording.
+- Preserve the sticky date/time workflow and automatically migrate an open browser session that still holds the former choice.
+
 ### Version 1.0.0-rc10.16.16 · Distinct FM map color
 
 - Change FM station and reception-path markers from green to high-contrast purple so they are easy to distinguish from cyan MW markers.
