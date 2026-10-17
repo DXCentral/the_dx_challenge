@@ -41,7 +41,14 @@ from dxcore.station_map import (
     heard_grid_polygons,
     maidenhead_grid_lines,
 )
-from dxcore.stations import FM_FREQUENCIES, MW_10_KHZ, MW_9_KHZ, NWR_FREQUENCIES, with_distances
+from dxcore.stations import (
+    FM_FREQUENCIES,
+    MW_10_KHZ,
+    MW_9_KHZ,
+    NWR_FREQUENCIES,
+    search_station_details,
+    with_distances,
+)
 from dxcore.subdivisions import north_america_admin1_geojson
 from dxcore.themes import THEMES
 from modules.fullscreen_workspace import render_fullscreen_control
@@ -327,6 +334,15 @@ if entry_mode in {"Station list", "Station map"}:
     matches = matches.copy()
     station_filter_version = int(st.session_state.get(f"station_filter_version_{band}", 0))
     with controls.popover("Filter stations", icon=":material/filter_alt:"):
+        general_filter = st.text_input(
+            "Search all station details",
+            key=f"station_general_{band}_{station_filter_version}",
+            placeholder="Call, city, ESPN, 92.3, PI code, WFO…",
+            help=(
+                "Searches frequency, call, location, format, network/slogan, "
+                "FM //s and notes, PI code, and Weather Forecast Office at once."
+            ),
+        )
         filter_columns = st.columns(2)
         call_filter = filter_columns[0].text_input("Call sign / station name", key=f"station_call_{band}_{station_filter_version}")
         city_filter = filter_columns[1].text_input("City", key=f"station_city_{band}_{station_filter_version}")
@@ -336,6 +352,41 @@ if entry_mode in {"Station list", "Station map"}:
         filter_columns = st.columns(2)
         county_filter = filter_columns[0].text_input("County / parish", key=f"station_county_{band}_{station_filter_version}")
         grid_filter = filter_columns[1].text_input("Grid", key=f"station_grid_{band}_{station_filter_version}")
+        format_filter = ""
+        network_slogan_filter = ""
+        station_notes_filter = ""
+        rds_pi_filter = ""
+        wfo_filter = ""
+        if band in {"MW", "FM"}:
+            filter_columns = st.columns(2)
+            format_filter = filter_columns[0].text_input(
+                "Format",
+                key=f"station_format_{band}_{station_filter_version}",
+                placeholder="News/Talk, Sports, Country…",
+            )
+            network_slogan_filter = filter_columns[1].text_input(
+                "Network / slogan",
+                key=f"station_network_slogan_{band}_{station_filter_version}",
+                placeholder="ESPN, La Caliente…",
+            )
+        if band == "MW":
+            station_notes_filter = st.text_input(
+                "FM //s / notes",
+                key=f"station_notes_{band}_{station_filter_version}",
+                placeholder="Translator, simulcast, or identification note",
+            )
+        elif band == "FM":
+            rds_pi_filter = st.text_input(
+                "RDS PI code",
+                key=f"station_rds_pi_{band}_{station_filter_version}",
+                placeholder="Enter a complete or partial PI code",
+            )
+        elif band == "NWR":
+            wfo_filter = st.text_input(
+                "Weather Forecast Office (WFO)",
+                key=f"station_wfo_{band}_{station_filter_version}",
+                placeholder="New Orleans/Baton Rouge, LA",
+            )
         st.button(
             "Clear filters",
             icon=":material/filter_alt_off:",
@@ -344,6 +395,7 @@ if entry_mode in {"Station list", "Station map"}:
             key=f"clear_station_filters_{band}",
         )
 
+    matches = search_station_details(matches, general_filter)
     for column, query in [
         ("call", call_filter),
         ("city", city_filter),
@@ -351,9 +403,18 @@ if entry_mode in {"Station list", "Station map"}:
         ("country", country_filter),
         ("county", county_filter),
         ("grid", grid_filter),
+        ("format", format_filter),
+        ("network_slogan", network_slogan_filter),
+        ("station_notes", station_notes_filter),
+        ("rds_pi", rds_pi_filter),
+        ("wfo", wfo_filter),
     ]:
         if query.strip():
-            matches = matches[matches[column].str.contains(query.strip(), case=False, na=False, regex=False)]
+            matches = matches[
+                matches[column].astype(str).str.contains(
+                    query.strip(), case=False, na=False, regex=False
+                )
+            ]
     matches = matches.reset_index(drop=True)
     if matches.empty:
         controls.info("No stations match the current filters.")
@@ -389,6 +450,13 @@ if entry_mode in {"Station list", "Station map"}:
         view[distance_label] = table_matches["distance_miles"].map(
             lambda value: convert_distance(value, preferences)
         )
+        view["bearing"] = table_matches.apply(
+            lambda row: (
+                f"{int(round(float(row['bearing_degrees']))) % 360:03d}° "
+                f"{row['bearing_compass']}"
+            ),
+            axis=1,
+        )
         ordered_columns = ["frequency", "call", "city", "region", "country"]
         if band in {"MW", "FM"}:
             ordered_columns.extend(["format", "network_slogan"])
@@ -398,7 +466,9 @@ if entry_mode in {"Station list", "Station map"}:
             ordered_columns.append("station_notes")
         if band == "NWR":
             ordered_columns.append("wfo")
-        ordered_columns.extend(["county", "grid", distance_label, "logged"])
+        ordered_columns.extend(
+            ["county", "grid", distance_label, "bearing", "logged"]
+        )
         slogan_column_label = "Slogan" if band == "FM" else "Network / slogan"
         view = view[ordered_columns].rename(
             columns={
@@ -414,6 +484,7 @@ if entry_mode in {"Station list", "Station map"}:
                 "wfo": "Weather Forecast Office (WFO)",
                 "county": "County / parish",
                 "grid": "Grid",
+                "bearing": "Bearing",
                 "logged": "History",
             }
         )
@@ -432,6 +503,7 @@ if entry_mode in {"Station list", "Station map"}:
             ),
             "Station": st.column_config.TextColumn(pinned=True),
             distance_label: st.column_config.NumberColumn(format="%.1f"),
+            "Bearing": st.column_config.TextColumn(width="small"),
         }
         if band in {"MW", "FM"}:
             station_column_config.update(

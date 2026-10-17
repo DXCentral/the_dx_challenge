@@ -1,3 +1,16 @@
+### Version 1.0.0-rc10.16.15 · Search all station details
+
+- Add one general Station filter that searches frequency, call, location, format, network/slogan, FM simulcasts and notes, FM RDS PI code, and NWR Weather Forecast Office together.
+- Support case-insensitive literal partial searches such as `92.3`, whether that clue appears in a network/slogan or an FM simulcast note.
+- Keep the general search available with Active challenge filter and combine it with any individual field filters for progressively narrower target lists.
+
+### Version 1.0.0-rc10.16.14 · Station identification filters and bearings
+
+- Add band-aware Station list and Station Map filters for format, network/slogan, FM simulcasts and notes, FM RDS PI code, and NWR Weather Forecast Office.
+- Keep these identification filters available after Active challenge filter narrows the eligible station targets, supporting searches such as ESPN stations on the current challenge frequencies.
+- Include every new field in the existing Clear filters action and use case-insensitive partial matching throughout.
+- Add the initial great-circle bearing from the selected receiving location to every Station list row, displayed in degrees and a 16-point compass direction such as `326° NW`.
+
 ### Version 1.0.0-rc10.16.13 · Challenge-scoped station history
 
 - Make Station list and Station Map history highlights use only the DXer's receptions that qualify for the selected active sprint while Active challenge filter is enabled.

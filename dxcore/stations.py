@@ -239,7 +239,11 @@ def frequencies_for_band(band: str, mw_spacing: str = "10 kHz") -> list[float]:
 
 def with_distances(frame: pd.DataFrame, latitude: float, longitude: float) -> pd.DataFrame:
     if frame.empty:
-        return frame.assign(distance_miles=pd.Series(dtype=float))
+        return frame.assign(
+            distance_miles=pd.Series(dtype=float),
+            bearing_degrees=pd.Series(dtype=float),
+            bearing_compass=pd.Series(dtype=str),
+        )
     lat1 = np.radians(float(latitude))
     lon1 = np.radians(float(longitude))
     lat2 = np.radians(frame["latitude"].astype(float).to_numpy())
@@ -248,9 +252,54 @@ def with_distances(frame: pd.DataFrame, latitude: float, longitude: float) -> pd
     delta_lon = lon2 - lon1
     value = np.sin(delta_lat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(delta_lon / 2) ** 2
     distance = EARTH_RADIUS_MILES * 2 * np.arctan2(np.sqrt(value), np.sqrt(1 - value))
+    bearing_x = np.sin(delta_lon) * np.cos(lat2)
+    bearing_y = (
+        np.cos(lat1) * np.sin(lat2)
+        - np.sin(lat1) * np.cos(lat2) * np.cos(delta_lon)
+    )
+    bearing = (np.degrees(np.arctan2(bearing_x, bearing_y)) + 360) % 360
+    compass_points = np.array(
+        [
+            "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+        ]
+    )
+    compass_indexes = np.floor((bearing + 11.25) / 22.5).astype(int) % 16
     result = frame.copy()
     result["distance_miles"] = np.round(distance, 1)
+    result["bearing_degrees"] = np.round(bearing, 1)
+    result["bearing_compass"] = compass_points[compass_indexes]
     return result.sort_values(["distance_miles", "call"])
+
+
+STATION_SEARCH_COLUMNS = (
+    "frequency",
+    "call",
+    "city",
+    "region",
+    "country",
+    "county",
+    "grid",
+    "format",
+    "network_slogan",
+    "station_notes",
+    "rds_pi",
+    "wfo",
+)
+
+
+def search_station_details(frame: pd.DataFrame, query: object) -> pd.DataFrame:
+    """Return rows containing a literal partial match in any station detail."""
+    text = str(query or "").strip()
+    if frame.empty or not text:
+        return frame
+    matched = pd.Series(False, index=frame.index, dtype=bool)
+    for column in STATION_SEARCH_COLUMNS:
+        if column in frame:
+            matched |= frame[column].fillna("").astype(str).str.contains(
+                text, case=False, regex=False
+            )
+    return frame[matched].copy()
 
 
 def stations_on_frequency(
