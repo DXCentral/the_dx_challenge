@@ -24,6 +24,16 @@ from dxcore.subdivisions import add_subdivision_keys, north_america_admin1_geojs
 
 HEARD_FILL = [0, 190, 230, 82]
 UNHEARD_FILL = [86, 103, 120, 16]
+BAND_COLORS = {
+    "MW": [0, 229, 255, 190],
+    "FM": [168, 85, 247, 220],
+    "NWR": [247, 166, 72, 205],
+}
+BAND_LEGEND_MARKDOWN = (
+    ":blue-badge[MW · cyan] "
+    ":violet-badge[FM · purple] "
+    ":orange-badge[NWR · orange]"
+)
 
 
 def _token(value: object) -> str:

@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.16.16 · Distinct FM map color
+
+- Change FM station and reception-path markers from green to high-contrast purple so they are easy to distinguish from cyan MW markers.
+- Apply one shared cyan/purple/orange band palette to the Stats and Challenge maps and their legends.
+- Keep NWR orange and MW cyan while avoiding yellow, which could be confused with NWR on dense maps.
+
 ### Version 1.0.0-rc10.16.15 · Search all station details
 
 - Add one general Station filter that searches frequency, call, location, format, network/slogan, FM simulcasts and notes, FM RDS PI code, and NWR Weather Forecast Office together.

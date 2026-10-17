@@ -23,7 +23,7 @@ from dxcore.metrics import (
     valid_station_coordinates,
 )
 from dxcore.presentation import display_log_table
-from dxcore.station_map import country_choropleth_counts
+from dxcore.station_map import BAND_COLORS, BAND_LEGEND_MARKDOWN, country_choropleth_counts
 from dxcore.subdivisions import (
     add_subdivision_keys,
     subdivision_counts,
@@ -43,11 +43,6 @@ STATE_FIPS = {
     "WY": 56, "PR": 72,
 }
 US_TOPO = "https://cdn.jsdelivr.net/npm/vega-datasets@v1.29.0/data/us-10m.json"
-BAND_COLORS = {
-    "MW": [0, 229, 255, 190],
-    "FM": [66, 211, 146, 190],
-    "NWR": [247, 166, 72, 205],
-}
 US_NAMES = {"united states", "united states of america", "usa", "us", "u.s.", "u.s.a."}
 
 
@@ -661,7 +656,7 @@ def render_challenge_dashboard(
                 layers.append(pdk.Layer("ArcLayer", id="challenge-paths", data=paths, get_source_position="source", get_target_position="target", get_source_color="color", get_target_color="color", get_width=1, width_min_pixels=1, width_max_pixels=2, pickable=True))
                 layers.append(pdk.Layer("ScatterplotLayer", id="challenge-dxer-locations", data=list(qths.values()), get_position="[longitude, latitude]", get_radius=500, radius_min_pixels=2, radius_max_pixels=3, stroked=True, get_fill_color=[255, 255, 255, 210], get_line_color=[10, 20, 30, 240], line_width_min_pixels=1, pickable=True))
             layers.append(pdk.Layer("ScatterplotLayer", id="challenge-stations", data=grouped, get_position="[station_longitude, station_latitude]", get_radius="radius", radius_min_pixels=2, radius_max_pixels=6, get_fill_color="color", pickable=True, auto_highlight=True))
-            st.markdown(":blue-badge[MW · cyan] :green-badge[FM · green] :orange-badge[NWR · orange]")
+            st.markdown(BAND_LEGEND_MARKDOWN)
             st.pydeck_chart(
                 pdk.Deck(layers=layers, initial_view_state=pdk.ViewState(latitude=float(grouped["station_latitude"].mean()), longitude=float(grouped["station_longitude"].mean()), zoom=2.5), tooltip={"text": "{call} · {station_city}, {station_region}\n{frequency} · {band}\n{log_count} unique challenge log(s)"}, map_style=None),
                 key=f"{prefix}_{_token(analysis)}_map",

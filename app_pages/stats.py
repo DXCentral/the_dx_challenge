@@ -13,7 +13,7 @@ from app_support import display_names, get_store, season_eligible_logs, season_m
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
 from dxcore.metrics import add_geography_keys, normalize_county, valid_station_coordinates
 from dxcore.presentation import display_log_table
-from dxcore.station_map import country_choropleth_counts
+from dxcore.station_map import BAND_COLORS, BAND_LEGEND_MARKDOWN, country_choropleth_counts
 from dxcore.subdivisions import subdivision_counts, subdivision_figure
 from dxcore.themes import THEMES
 
@@ -29,11 +29,6 @@ STATE_FIPS = {
     "WY": 56, "PR": 72,
 }
 US_TOPO = "https://cdn.jsdelivr.net/npm/vega-datasets@v1.29.0/data/us-10m.json"
-BAND_COLORS = {
-    "MW": [0, 229, 255, 190],
-    "FM": [66, 211, 146, 190],
-    "NWR": [247, 166, 72, 205],
-}
 
 
 @st.cache_data
@@ -665,7 +660,7 @@ elif map_view in {"Station locations", "Paths"}:
             auto_highlight=True,
         )
     )
-    st.markdown(":blue-badge[MW · cyan] :green-badge[FM · green] :orange-badge[NWR · orange]")
+    st.markdown(BAND_LEGEND_MARKDOWN)
     view = pdk.ViewState(
         latitude=float(grouped["station_latitude"].mean()) if not grouped.empty else 20.0,
         longitude=float(grouped["station_longitude"].mean()) if not grouped.empty else -30.0,
