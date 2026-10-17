@@ -973,16 +973,23 @@ with review_target.container(border=True):
         )
     elif active_sprints:
         st.caption("This reception will still count toward season-long awards and statistics, but not the current challenge.")
+    # Preserve active sessions created before "From recording" was renamed.
+    if st.session_state.get("log_timing_mode") == "From recording":
+        st.session_state.log_timing_mode = "Earlier reception"
     st.session_state.setdefault("log_timing_mode", "Live DX")
     timing = st.segmented_control(
         "Reception timing",
-        ["Live DX", "From recording"],
+        ["Live DX", "Earlier reception"],
         key="log_timing_mode",
         persist_state="session",
     )
+    st.caption(
+        "Choose Earlier reception for a recording or any reception heard previously, "
+        "then enter the original UTC date and time."
+    )
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     with st.form(f"review_log_{selected['station_id']}"):
-        if timing == "From recording":
+        if timing == "Earlier reception":
             reception_date = st.date_input(
                 "Reception date (UTC)",
                 value=st.session_state.get("last_recording_date", now.date()),
@@ -1059,7 +1066,7 @@ with review_target.container(border=True):
             }
         )
         if accepted:
-            if timing == "From recording":
+            if timing == "Earlier reception":
                 st.session_state.last_recording_date = reception.date()
                 st.session_state.last_recording_time = reception.time().replace(
                     tzinfo=None
