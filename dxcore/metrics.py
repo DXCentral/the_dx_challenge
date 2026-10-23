@@ -19,6 +19,52 @@ CHALLENGE_SCORE_FIELDS = {
 }
 
 
+def filter_reception_notes(frame: pd.DataFrame, query: str) -> pd.DataFrame:
+    """Match literal programming notes within the caller's existing log scope."""
+    text = query.strip()
+    if not text:
+        return frame.copy()
+    if "notes" not in frame:
+        return frame.iloc[:0].copy()
+    return frame.loc[
+        frame["notes"].fillna("").astype(str).str.contains(text, case=False, regex=False)
+    ].copy()
+
+
+def user_station_receptions(
+    frame: pd.DataFrame, user_id: str, station_id: str | None = None
+) -> pd.DataFrame:
+    """Return one DXer's nondeleted receptions, retaining the caller's time scope."""
+    if frame.empty or not {"user_id", "station_id", "reception_utc"}.issubset(frame.columns):
+        return frame.iloc[:0].copy()
+    mask = frame["user_id"].astype(str).eq(str(user_id))
+    if station_id is not None:
+        mask &= frame["station_id"].astype(str).eq(str(station_id))
+    if "deleted_utc" in frame:
+        mask &= frame["deleted_utc"].fillna("").astype(str).str.strip().eq("")
+    result = frame.loc[mask].copy()
+    result["reception_utc"] = pd.to_datetime(
+        result["reception_utc"], utc=True, errors="coerce", format="mixed"
+    )
+    return result.sort_values("reception_utc", kind="stable", na_position="last")
+
+
+def station_reception_summary(frame: pd.DataFrame, user_id: str) -> pd.DataFrame:
+    """Summarize first/last reception and all repeat logs, never mixing DXers."""
+    rows = user_station_receptions(frame, user_id)
+    if rows.empty:
+        return pd.DataFrame(
+            columns=["original_log_utc", "last_heard_utc", "log_count"],
+            index=pd.Index([], name="station_id"),
+        )
+    rows = rows[rows["station_id"].fillna("").astype(str).str.strip().ne("")]
+    return rows.groupby("station_id").agg(
+        original_log_utc=("reception_utc", "min"),
+        last_heard_utc=("reception_utc", "max"),
+        log_count=("station_id", "size"),
+    )
+
+
 def grid4(value: object) -> str:
     text = "" if pd.isna(value) else str(value).strip().upper()
     return text[:4] if len(text) >= 4 else ""
