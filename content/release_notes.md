@@ -1,3 +1,11 @@
+### Version 1.0.0-rc10.16.18 · Station reception history and notes search
+
+- Show the original reception date in MM/DD/YYYY format and the number of receptions in the Station list's History column, using the current season or selected active sprint as appropriate.
+- Keep logged rows highlighted and include the same first-date/count summary in Station map hover details.
+- Add a Your station log history expander to the selected station's review panel, showing the DXer's individual receptions, operating locations, propagation, notes, and entry sources within the current history scope.
+- Add case-insensitive, literal reception-notes searches to My Logbook, Stats, Challenges, and station history. Combine notes searches with existing filters and reset them through Clear filters.
+- Apply notes filters before calculating displayed counters, charts, maps, and filtered log exports while preserving the underlying season, award, and challenge rules.
+
 ### Version 1.0.0-rc10.16.17 · Clearer earlier-reception entry
 
 - Rename the Log Entry timing choice from From recording to Earlier reception so it also clearly covers mobile, portable, and other DX sessions entered afterward.

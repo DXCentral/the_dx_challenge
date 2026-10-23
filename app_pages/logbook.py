@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app_support import get_store, season_eligible_logs, season_marathons
-from dxcore.metrics import add_geography_keys
+from dxcore.metrics import add_geography_keys, filter_reception_notes
 from dxcore.presentation import (
     display_log_table,
     distance_column_label,
@@ -64,7 +64,7 @@ county_labels = (
 filter_version = int(st.session_state.get("logbook_filter_version", 0))
 filter_keys = {
     field: f"logbook_{field}_{filter_version}"
-    for field in ["bands", "propagation", "frequency", "source", "region", "country", "grid", "county"]
+    for field in ["bands", "propagation", "frequency", "source", "region", "country", "grid", "county", "notes"]
 }
 
 with st.container(border=True):
@@ -109,6 +109,12 @@ with st.container(border=True):
         key=filter_keys["county"],
         format_func=lambda value: "All" if value == "All" else county_labels.get(value, value),
     )
+    notes_query = st.text_input(
+        "Search reception notes",
+        key=filter_keys["notes"],
+        placeholder="ESPN, ABC News, When Radio Was…",
+        help="Searches your submitted programming notes, using a case-insensitive literal match. Combines with every filter above.",
+    )
 
 st.button(
     "Clear filters",
@@ -132,6 +138,7 @@ for column, choice in [
             filtered = filtered[(filtered[column].astype(float) - float(choice)).abs() < 0.001]
         else:
             filtered = filtered[filtered[column].astype(str) == str(choice)]
+filtered = filter_reception_notes(filtered, notes_query)
 safe_columns = [
     "reception_utc",
     "band",
@@ -179,6 +186,7 @@ event = st.dataframe(
         time_column_label(preferences): st.column_config.TextColumn(pinned=True),
         "is_sdr": st.column_config.CheckboxColumn("SDR"),
         "is_portable": st.column_config.CheckboxColumn("Portable"),
+        "notes": st.column_config.TextColumn("Notes", width="large"),
     },
 )
 

@@ -11,7 +11,7 @@ import streamlit as st
 
 from app_support import display_names, get_store, season_eligible_logs, season_marathons
 from dxcore.config import COUNTY_GEOJSON_FILE, COUNTY_REFERENCE_FILE
-from dxcore.metrics import add_geography_keys, normalize_county, valid_station_coordinates
+from dxcore.metrics import add_geography_keys, filter_reception_notes, normalize_county, valid_station_coordinates
 from dxcore.presentation import display_log_table
 from dxcore.station_map import BAND_COLORS, BAND_LEGEND_MARKDOWN, country_choropleth_counts
 from dxcore.subdivisions import subdivision_counts, subdivision_figure
@@ -133,7 +133,7 @@ selection_version = int(st.session_state.get("stats_map_selection_version", 0))
 filter_version = int(st.session_state.get("stats_filter_version", 0))
 filter_keys = {
     field: f"stats_{field}_{filter_version}"
-    for field in ["bands", "propagation", "dxer", "frequency", "region", "country", "grid", "county"]
+    for field in ["bands", "propagation", "dxer", "frequency", "region", "country", "grid", "county", "notes"]
 }
 regions = sorted(value for value in logs["station_region"].unique() if value)
 countries = sorted(value for value in logs["station_country"].unique() if value)
@@ -201,6 +201,12 @@ with st.container(border=True):
         key=filter_keys["county"],
         format_func=lambda value: "All" if value == "All" else county_labels.get(value, value),
     )
+    notes_query = st.text_input(
+        "Search reception notes",
+        key=filter_keys["notes"],
+        placeholder="ESPN, ABC News, When Radio Was…",
+        help="Searches DXers' submitted programming notes, using a case-insensitive literal match. Combines with every filter above.",
+    )
 
 st.button(
     "Clear filters",
@@ -226,6 +232,7 @@ for column, choice in [
         else:
             filtered = filtered[filtered[column].astype(str) == str(choice)]
 
+filtered = filter_reception_notes(filtered, notes_query)
 unique_logs = filtered.drop_duplicates(["user_id", "station_id"])
 with st.container(horizontal=True):
     st.metric("Receptions", f"{len(filtered):,}", border=True)
@@ -696,5 +703,6 @@ safe_columns = [
 st.dataframe(
     display_log_table(filtered_table[safe_columns], st.session_state.user),
     hide_index=True,
+    column_config={"notes": st.column_config.TextColumn("Notes", width="large")},
     key="stats_filtered_receptions",
 )

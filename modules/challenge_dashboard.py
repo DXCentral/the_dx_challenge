@@ -19,6 +19,7 @@ from dxcore.metrics import (
     add_geography_keys,
     challenge_band_scores,
     challenge_scores,
+    filter_reception_notes,
     normalize_county,
     valid_station_coordinates,
 )
@@ -236,7 +237,7 @@ def _render_filters(
     filter_version = int(st.session_state.get(f"{prefix}_filter_version", 0))
     filter_keys = {
         field: f"{prefix}_{field}_{filter_version}"
-        for field in ["bands", "propagation", "dxer", "frequency", "region", "country", "grid", "county"]
+        for field in ["bands", "propagation", "dxer", "frequency", "region", "country", "grid", "county", "notes"]
     }
     regions = sorted(value for value in logs["station_region"].astype(str).unique() if value)
     countries = sorted(value for value in logs["station_country"].astype(str).unique() if value)
@@ -292,6 +293,12 @@ def _render_filters(
             key=filter_keys["county"],
             format_func=lambda value: "All" if value == "All" else county_labels.get(value, value),
         )
+        notes_query = st.text_input(
+            "Search reception notes",
+            key=filter_keys["notes"],
+            placeholder="ESPN, ABC News, When Radio Was…",
+            help="Searches DXers' submitted programming notes, using a case-insensitive literal match. Combines with every challenge filter above.",
+        )
 
     with st.container(horizontal=True):
         st.button(
@@ -336,6 +343,7 @@ def _render_filters(
                 filtered = filtered[(filtered[column].astype(float) - float(choice)).abs() < 0.001]
             else:
                 filtered = filtered[filtered[column].astype(str) == str(choice)]
+    filtered = filter_reception_notes(filtered, notes_query)
     return filtered, str(dxer_choice), {
         "regions": regions,
         "countries": countries,
@@ -685,5 +693,6 @@ def render_challenge_dashboard(
     st.dataframe(
         display_log_table(table[safe_columns], st.session_state.user),
         hide_index=True,
+        column_config={"notes": st.column_config.TextColumn("Notes", width="large")},
         key=f"{prefix}_receptions",
     )

@@ -37,6 +37,18 @@ def time_column_label(preferences: dict[str, object]) -> str:
     return "Reception (local)" if uses_local_time(preferences) else "Reception (UTC)"
 
 
+def format_station_history(
+    original_log_utc: object, count: int, preferences: dict[str, object]
+) -> str:
+    instant = pd.to_datetime(original_log_utc, utc=True, errors="coerce")
+    date = (
+        instant.to_pydatetime().astimezone(display_zone(preferences)).strftime("%m/%d/%Y")
+        if not pd.isna(instant)
+        else "Unknown"
+    )
+    return f"Original Log Date: {date} ({int(count):,})"
+
+
 def distance_is_km(preferences: dict[str, object]) -> bool:
     return str(preferences.get("distance_unit", "Miles")) == "Kilometers"
 

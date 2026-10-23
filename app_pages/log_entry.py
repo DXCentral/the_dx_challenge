@@ -24,13 +24,20 @@ from dxcore.content import (
     station_qualifies_for_challenge,
 )
 from dxcore.geo import haversine_miles, latlon_to_grid
+from dxcore.metrics import (
+    filter_reception_notes,
+    station_reception_summary,
+    user_station_receptions,
+)
 from dxcore.propagation import FM_NWR_PROPAGATION_OPTIONS, MW_DAYPART_HELP, MW_PROPAGATION_OPTIONS
 from dxcore.presentation import (
     convert_distance,
+    display_log_table,
     distance_column_label,
     distance_is_km,
     format_distance,
     format_reception,
+    format_station_history,
 )
 from dxcore.solar import mw_propagation
 from dxcore.station_map import (
@@ -103,6 +110,10 @@ def manual_station_id(band: str, frequency: float, call: str, city: str, region:
 def clear_station_filters(band: str) -> None:
     version_key = f"station_filter_version_{band}"
     st.session_state[version_key] = int(st.session_state.get(version_key, 0)) + 1
+
+
+def clear_station_history_notes(key: str) -> None:
+    st.session_state[key] = ""
 
 
 def open_map_workspace() -> None:
@@ -314,6 +325,7 @@ if entry_mode in {"Station list", "Station map"}:
         )
         history_logged_label = "Logged in current challenge"
         history_unlogged_label = "Not logged in current challenge"
+        history_scope_label = f"Current challenge: {focused_challenge['name']}"
         last_heard_heading = "Last heard in challenge"
         controls.caption(
             "Station-history highlights now include only your qualifying receptions "
@@ -323,8 +335,14 @@ if entry_mode in {"Station list", "Station map"}:
         existing = season_eligible_logs(all_user_logs)
         history_logged_label = "Previously logged"
         history_unlogged_label = "New / unlogged"
+        history_scope_label = "Current season"
         last_heard_heading = "Last heard"
-    heard_ids = set(existing["station_id"]) if not existing.empty else set()
+    history_summary = station_reception_summary(existing, user_id)
+    history_labels = {
+        station_id: format_station_history(row["original_log_utc"], row["log_count"], preferences)
+        for station_id, row in history_summary.iterrows()
+    }
+    heard_ids = set(history_summary.index)
     if matches.empty:
         message = "No stations match this frequency and distance range."
         if challenge_filter:
@@ -430,9 +448,8 @@ if entry_mode in {"Station list", "Station map"}:
                 "Use the station filters to narrow the full database by call, location, county, or grid."
             )
 
-        table_matches["logged"] = table_matches["station_id"].isin(heard_ids).map(
-            {True: history_logged_label, False: history_unlogged_label}
-        )
+        table_matches["logged"] = table_matches["station_id"].map(history_labels).fillna(history_unlogged_label)
+        logged_rows = set(table_matches.index[table_matches["station_id"].isin(heard_ids)])
         distance_label = distance_column_label(preferences)
         view_columns = ["frequency", "call", "city", "region", "country"]
         if band in {"MW", "FM"}:
@@ -492,7 +509,7 @@ if entry_mode in {"Station list", "Station map"}:
         styled_view = view.style.apply(
             lambda row: [
                 "background-color: #BFE8D0; color: #123B26; font-weight: 600"
-                if row["History"] == history_logged_label
+                if row.name in logged_rows
                 else ""
             ] * len(row),
             axis=1,
@@ -504,6 +521,15 @@ if entry_mode in {"Station list", "Station map"}:
             "Station": st.column_config.TextColumn(pinned=True),
             distance_label: st.column_config.NumberColumn(format="%.1f"),
             "Bearing": st.column_config.TextColumn(width="small"),
+            "History": st.column_config.TextColumn(
+                width="large",
+                help=(
+                    "First reception date (MM/DD/YYYY) and total receptions in parentheses, "
+                    "within the current season or selected active challenge. "
+                    "Dates follow your profile's UTC/local display preference. "
+                    "Select a station and expand Your station log history to view every reception."
+                ),
+            ),
         }
         if band in {"MW", "FM"}:
             station_column_config.update(
@@ -527,7 +553,7 @@ if entry_mode in {"Station list", "Station map"}:
             column_config=station_column_config,
             lazy=False,
         )
-        if event.selection.rows:
+        if event.selection.rows and 0 <= event.selection.rows[0] < len(table_matches):
             selected = table_matches.iloc[event.selection.rows[0]].to_dict()
     else:
         map_matches = matches.copy()
@@ -553,9 +579,7 @@ if entry_mode in {"Station list", "Station map"}:
                 return "—"
             return html.escape(str(value).strip())
 
-        map_matches["history_label"] = map_matches["station_id"].isin(heard_ids).map(
-            {True: history_logged_label, False: history_unlogged_label}
-        )
+        map_matches["history_label"] = map_matches["station_id"].map(history_labels).fillna(history_unlogged_label)
         map_matches["marker_color"] = map_matches["station_id"].isin(heard_ids).map(
             {True: [0, 190, 230, 235], False: [255, 145, 0, 235]}
         )
@@ -565,19 +589,7 @@ if entry_mode in {"Station list", "Station map"}:
         map_matches["distance_label"] = map_matches["distance_miles"].map(
             lambda value: format_distance(float(value), preferences)
         )
-        last_heard = existing.copy()
-        if not last_heard.empty:
-            last_heard["reception_utc"] = pd.to_datetime(
-                last_heard["reception_utc"], utc=True, errors="coerce"
-            )
-            last_heard_lookup = (
-                last_heard.dropna(subset=["reception_utc"])
-                .groupby("station_id")["reception_utc"]
-                .max()
-                .to_dict()
-            )
-        else:
-            last_heard_lookup = {}
+        last_heard_lookup = history_summary["last_heard_utc"].dropna().to_dict()
         map_matches["last_heard_label"] = map_matches["station_id"].map(
             lambda station_id: format_reception(last_heard_lookup[station_id], preferences)
             if station_id in last_heard_lookup
@@ -965,6 +977,55 @@ with review_target.container(border=True):
         f"{selected['city']}, {selected['region']}, {selected['country']} · "
         f"{format_distance(selected['distance_miles'], preferences)}"
     )
+    if entry_mode in {"Station list", "Station map"}:
+        with st.expander("Your station log history", icon=":material/history:"):
+            st.caption(
+                f"{history_scope_label}. All your receptions for this station are listed, "
+                "including repeat receptions, across your operating locations. "
+                "Dates and times follow your profile's UTC/local display preference."
+            )
+            station_history = user_station_receptions(existing, user_id, str(selected["station_id"]))
+            if station_history.empty:
+                st.caption("You have no receptions for this station in the current history scope.")
+            else:
+                st.caption(history_labels.get(selected["station_id"], ""))
+                history_notes_key = (
+                    f"station_history_notes_{band}_{selected['station_id']}_"
+                    f"{challenge_identity or 'season'}"
+                )
+                history_notes = st.text_input(
+                    "Search reception notes",
+                    key=history_notes_key,
+                    placeholder="ESPN, ABC News, When Radio Was…",
+                    help="Searches your submitted programming notes, using a case-insensitive literal match.",
+                )
+                st.button(
+                    "Clear history notes search",
+                    key=f"{history_notes_key}_clear",
+                    on_click=clear_station_history_notes,
+                    args=(history_notes_key,),
+                    icon=":material/filter_alt_off:",
+                )
+                station_history = filter_reception_notes(station_history, history_notes)
+                if station_history.empty:
+                    st.info("No receptions match this notes search.")
+                else:
+                    locations = store.locations(user_id)
+                    location_labels = dict(zip(locations["location_id"], locations["label"], strict=False))
+                    station_history["QTH"] = station_history["location_id"].map(location_labels).fillna("Unknown location")
+                    history_columns = [
+                        "reception_utc", "QTH", "band", "frequency", "call", "propagation",
+                        "distance_miles", "is_sdr", "is_portable", "notes", "source",
+                    ]
+                    st.dataframe(
+                        display_log_table(station_history[history_columns], preferences),
+                        hide_index=True,
+                        column_config={
+                            "notes": st.column_config.TextColumn("Notes", width="large"),
+                            "is_sdr": st.column_config.CheckboxColumn("SDR"),
+                            "is_portable": st.column_config.CheckboxColumn("Portable"),
+                        },
+                    )
     if eligible_sprints:
         st.caption(
             "Station criteria match: "
