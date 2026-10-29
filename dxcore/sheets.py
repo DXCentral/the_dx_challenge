@@ -75,6 +75,8 @@ class GoogleSheetMirror:
         self, worksheet, sheet_name: str, values: list[list[object]]
     ) -> list[list[object]]:
         expected = SHEET_SCHEMAS[sheet_name]
+        if getattr(worksheet, "col_count", len(expected)) < len(expected):
+            worksheet.resize(cols=len(expected))
         if not values:
             worksheet.update(range_name="A1", values=[expected])
             return [expected]

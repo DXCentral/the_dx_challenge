@@ -12,7 +12,7 @@ from typing import Iterator
 import pandas as pd
 
 from dxcore.config import CONTENT_DIR, LOCAL_DB_PATH
-from dxcore.content import challenges_from_frame, validate_season_submission
+from dxcore.content import STATION_ELIGIBILITY_OPTIONS, challenges_from_frame, validate_season_submission
 from dxcore.geo import haversine_miles, latlon_to_grid, valid_coordinates, valid_grid
 from dxcore.schema import SHEET_SCHEMAS
 
@@ -165,6 +165,7 @@ class LocalStore:
                     min_distance TEXT NOT NULL,
                     max_distance TEXT NOT NULL,
                     scoring_method TEXT NOT NULL,
+                    station_eligibility TEXT NOT NULL DEFAULT 'All stations',
                     description TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 1,
                     created_utc TEXT NOT NULL,
@@ -300,6 +301,13 @@ class LocalStore:
                     connection.execute(
                         f"ALTER TABLE announcements ADD COLUMN {column} {definition}"
                     )
+            existing_challenge_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(challenges)").fetchall()
+            }
+            if "station_eligibility" not in existing_challenge_columns:
+                connection.execute(
+                    "ALTER TABLE challenges ADD COLUMN station_eligibility TEXT NOT NULL DEFAULT 'All stations'"
+                )
             existing_ticket_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(support_tickets)").fetchall()
             }
@@ -390,6 +398,7 @@ class LocalStore:
                         not in {"", "0", "false", "no"}
                     )
                     record["scoring_method"] = row.get("scoring_method", "") or "Unique stations"
+                    record["station_eligibility"] = row.get("station_eligibility", "") or "All stations"
                     record["created_utc"] = now
                     record["updated_utc"] = now
                     values.append(tuple(record[column] for column in columns))
@@ -1847,6 +1856,14 @@ class LocalStore:
             end = end.replace(tzinfo=timezone.utc)
         if end <= start:
             raise ValueError("Challenge end must be later than its start.")
+        station_eligibility = str(values.get("station_eligibility", "")).strip() or "All stations"
+        if station_eligibility not in STATION_ELIGIBILITY_OPTIONS:
+            raise ValueError("Choose a supported station eligibility rule.")
+        if station_eligibility == "New this season only":
+            if str(values.get("challenge_type", "")).strip().lower() != "sprint":
+                raise ValueError("New this season only is available for sprint challenges. Marathons use All stations.")
+            if str(values.get("scoring_method", "Unique stations")) != "Unique stations":
+                raise ValueError("New this season only requires Unique stations leaderboard scoring.")
         columns = SHEET_SCHEMAS["Challenges"]
         now = iso_utc()
         with self.connect() as connection:
@@ -1858,6 +1875,7 @@ class LocalStore:
                 {
                     "challenge_id": challenge_id,
                     "challenge_name": name[:160],
+                    "station_eligibility": station_eligibility,
                     "start_utc": iso_utc(start),
                     "end_utc": iso_utc(end),
                     "active": int(bool(values.get("active", True))),

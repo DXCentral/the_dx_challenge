@@ -13,6 +13,75 @@ from dxcore.propagation import normalize_mw_propagation
 CHALLENGE_FILE = CONTENT_DIR / "challenge_schedule.csv"
 ANNOUNCEMENT_FILE = CONTENT_DIR / "announcements.csv"
 SUPPORTED_BANDS = ("MW", "FM", "NWR")
+STATION_ELIGIBILITY_OPTIONS = ("All stations", "New this season only")
+
+
+def new_season_stations_only(challenge: dict[str, object]) -> bool:
+    return (
+        challenge.get("type") == "sprint"
+        and challenge.get("rules", {}).get("station_eligibility") == "New this season only"
+    )
+
+
+def _season_reception_history(season_logs: pd.DataFrame | None) -> pd.DataFrame:
+    columns = ["user_id", "band", "station_id", "reception_utc"]
+    if season_logs is None or not set(columns).issubset(season_logs.columns):
+        return pd.DataFrame(columns=columns)
+    rows = season_logs.copy()
+    if "deleted_utc" in rows:
+        rows = rows[rows["deleted_utc"].fillna("").astype(str).str.strip().eq("")]
+    rows = rows[columns].copy()
+    for column in columns[:3]:
+        rows[column] = rows[column].fillna("").astype(str).str.strip()
+    rows["band"] = rows["band"].str.upper()
+    rows["reception_utc"] = pd.to_datetime(
+        rows["reception_utc"], utc=True, errors="coerce", format="mixed"
+    )
+    return rows[
+        rows["reception_utc"].notna()
+        & rows["user_id"].ne("")
+        & rows["station_id"].ne("")
+    ]
+
+
+def previously_heard_station_ids(
+    season_logs: pd.DataFrame | None, user_id: str, challenge: dict[str, object]
+) -> set[str]:
+    """Season history before the sprint, independent of QTH or sprint restrictions."""
+    rows = _season_reception_history(season_logs)
+    if rows.empty:
+        return set()
+    return set(rows.loc[
+        rows["user_id"].eq(str(user_id))
+        & rows["band"].isin(challenge["bands"])
+        & rows["reception_utc"].lt(challenge["start_utc"]),
+        "station_id",
+    ])
+
+
+def _new_season_reception_mask(
+    logs: pd.DataFrame, challenge: dict[str, object], season_logs: pd.DataFrame | None
+) -> pd.Series:
+    history = _season_reception_history(season_logs)
+    if history.empty:
+        return pd.Series(False, index=logs.index, dtype=bool)
+    keys = ["user_id", "band", "station_id"]
+    candidates = logs.reindex(columns=[*keys, "reception_utc"]).copy()
+    for column in keys:
+        candidates[column] = candidates[column].fillna("").astype(str).str.strip()
+    candidates["band"] = candidates["band"].str.upper()
+    candidates["reception_utc"] = pd.to_datetime(
+        candidates["reception_utc"], utc=True, errors="coerce", format="mixed"
+    )
+    first = history.groupby(keys)["reception_utc"].min()
+    original_dates = pd.Series(
+        first.reindex(pd.MultiIndex.from_frame(candidates[keys])).array,
+        index=logs.index,
+    )
+    # A matching station alone is insufficient: this particular reception must
+    # satisfy a season marathon too, even if the sprint spans a wider period.
+    seasonal = pd.MultiIndex.from_frame(candidates).isin(pd.MultiIndex.from_frame(history))
+    return original_dates.between(challenge["start_utc"], challenge["end_utc"]) & seasonal
 
 
 def _text(value: object) -> str:
@@ -133,6 +202,7 @@ def challenges_from_frame(frame: pd.DataFrame) -> list[dict[str, object]]:
             "band": bands[0] if len(bands) == 1 else "Multiple",
             "description": _text(row.get("description")),
             "rules": {
+                "station_eligibility": _text(row.get("station_eligibility")) or "All stations",
                 "frequencies": frequencies,
                 "include_countries": _items(row.get("include_countries", "")),
                 "exclude_countries": _items(row.get("exclude_countries", "")),
@@ -199,7 +269,10 @@ def station_qualifies_for_challenge(
     return True
 
 
-def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, object]) -> bool:
+def log_qualifies(
+    log: pd.Series | dict[str, object], challenge: dict[str, object],
+    *, season_logs: pd.DataFrame | None = None,
+) -> bool:
     value = dict(log)
     station_view = {
         "band": value.get("band", ""),
@@ -233,11 +306,14 @@ def log_qualifies(log: pd.Series | dict[str, object], challenge: dict[str, objec
         and canonical_propagation(raw_propagation).casefold() not in fm_nwr_modes
     ):
         return False
+    if new_season_stations_only(challenge):
+        return bool(_new_season_reception_mask(pd.DataFrame([value]), challenge, season_logs).iloc[0])
     return True
 
 
 def challenge_log_mask(
-    logs: pd.DataFrame, challenge: dict[str, object]
+    logs: pd.DataFrame, challenge: dict[str, object],
+    *, season_logs: pd.DataFrame | None = None,
 ) -> pd.Series:
     """Vectorized equivalent of ``log_qualifies`` for leaderboard-sized data."""
     if logs.empty:
@@ -279,7 +355,7 @@ def challenge_log_mask(
     if rules.get("max_distance") is not None:
         mask &= distances <= float(rules["max_distance"])
 
-    receptions = pd.to_datetime(logs["reception_utc"], utc=True, errors="coerce")
+    receptions = pd.to_datetime(logs["reception_utc"], utc=True, errors="coerce", format="mixed")
     mask &= receptions.between(challenge["start_utc"], challenge["end_utc"])
 
     raw_propagation = logs["propagation"].fillna("")
@@ -293,18 +369,21 @@ def challenge_log_mask(
         mask &= bands.eq("MW") | raw_propagation.map(
             canonical_propagation
         ).str.casefold().isin(fm_nwr_modes)
+    if new_season_stations_only(challenge):
+        mask &= _new_season_reception_mask(logs, challenge, season_logs)
     return mask.fillna(False)
 
 
 def logs_qualifying_for_challenges(
-    logs: pd.DataFrame, challenges: list[dict[str, object]]
+    logs: pd.DataFrame, challenges: list[dict[str, object]],
+    *, season_logs: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Return each reception once when it qualifies for at least one challenge."""
     if logs.empty or not challenges:
         return logs.iloc[0:0].copy()
     eligible = pd.Series(False, index=logs.index, dtype=bool)
     for challenge in challenges:
-        eligible |= challenge_log_mask(logs, challenge)
+        eligible |= challenge_log_mask(logs, challenge, season_logs=season_logs)
     return logs[eligible].copy()
 
 
@@ -312,6 +391,7 @@ def validate_season_submission(
     log: pd.Series | dict[str, object],
     challenges: list[dict[str, object]],
     now: datetime | None = None,
+    *, season_logs: pd.DataFrame | None = None,
 ) -> tuple[bool, str, list[str]]:
     """Validate one submitted reception and identify any sprint memberships.
 
@@ -345,10 +425,14 @@ def validate_season_submission(
             f"This {band} reception is outside the enabled Season 7 marathon criteria and was not saved.",
             [],
         )
+    sprint_history = (
+        pd.concat([season_logs, pd.DataFrame([value])], ignore_index=True)
+        if season_logs is not None else None
+    )
     sprint_names = [
         str(item["name"])
         for item in challenges
-        if item.get("type") == "sprint" and log_qualifies(value, item)
+        if item.get("type") == "sprint" and log_qualifies(value, item, season_logs=sprint_history)
     ]
     return True, "Reception is eligible for Season 7.", sprint_names
 
