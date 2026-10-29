@@ -105,6 +105,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "exclude_countries", "include_regions", "exclude_regions",
         "propagation_modes", "dayparts", "min_distance", "max_distance",
         "scoring_method", "description", "active", "created_utc", "updated_utc",
+        "station_eligibility",
     ],
     "Support Tickets": [
         "ticket_id", "user_id", "category", "subject", "details", "created_utc",

@@ -3,13 +3,16 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app_support import challenge_status, display_names, get_store
-from dxcore.content import logs_qualifying_for_challenges
+from app_support import challenge_status, display_names, get_store, season_eligible_logs
+from dxcore.content import logs_qualifying_for_challenges, new_season_stations_only
 from modules.challenge_dashboard import render_challenge_dashboard
 
 
 def challenge_logs(challenge: dict[str, object], logs: pd.DataFrame) -> pd.DataFrame:
-    return logs_qualifying_for_challenges(logs, [challenge])
+    return logs_qualifying_for_challenges(
+        logs, [challenge],
+        season_logs=season_eligible_logs(logs) if new_season_stations_only(challenge) else None,
+    )
 
 
 def show_results_period(period: str) -> None:
@@ -97,6 +100,13 @@ if selected is not None:
         )
         if selected.get("description"):
             st.write(selected["description"])
+        if new_season_stations_only(selected):
+            st.info(
+                "New this season only: each station scores once per DXer across the selected bands. "
+                "Your first season-eligible reception of that station must be during this sprint. "
+                "All operating locations and logging methods count toward earlier history. "
+                "Older receptions imported later can change these results."
+            )
         if selected_period == "Current challenge":
             st.page_link(
                 "app_pages/log_entry.py",

@@ -1,3 +1,11 @@
+### Version 1.0.0-rc10.16.19 · New-this-season sprint challenges
+
+- Add Station eligibility to Admin → Challenges, with All stations as the existing default and New this season only for sprints scored by Unique stations.
+- Count a station only when that DXer's first season-eligible reception falls within the sprint's UTC window. History spans all saved QTHs, bands, and logging methods, including bandscan and bulk imports.
+- Recalculate sprint results from reception dates, so an earlier reception imported or corrected later can remove sprint credit without deleting normal season logs.
+- Apply the eligibility rule to Challenge results, sprint leaderboards, maps, tables, and active-challenge station-list/map history. The optional target filter excludes stations heard before the sprint and highlights new stations already scored during it.
+- Automatically extend each environment's Challenges Sheet and local cache with the new setting, preserving existing records and treating blank or missing values as All stations.
+
 ### Version 1.0.0-rc10.16.18 · Station reception history and notes search
 
 - Show the original reception date in MM/DD/YYYY format and the number of receptions in the Station list's History column, using the current season or selected active sprint as appropriate.

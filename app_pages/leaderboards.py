@@ -170,7 +170,7 @@ current, previous, _ = challenge_status()
 sprints = [item for item in current + previous if item["type"] == "sprint"]
 qualified_frames: list[pd.DataFrame] = []
 for challenge in sprints:
-    matches = logs_qualifying_for_challenges(all_logs, [challenge])
+    matches = logs_qualifying_for_challenges(all_logs, [challenge], season_logs=logs)
     if not matches.empty:
         matches["sprint_name"] = str(challenge["name"])
         matches["sprint_id"] = str(challenge["id"])

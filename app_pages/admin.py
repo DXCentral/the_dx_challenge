@@ -13,7 +13,7 @@ from app_support import (
     get_store,
     require_admin_access,
 )
-from dxcore.content import parse_frequency_spec
+from dxcore.content import STATION_ELIGIBILITY_OPTIONS, parse_frequency_spec
 from dxcore.geo import haversine_miles, latlon_to_grid
 from dxcore.metrics import canonical_daypart
 from dxcore.propagation import (
@@ -242,6 +242,19 @@ elif section == "Challenges":
             for value in propagation_modes
             if value in MW_PROPAGATION_OPTIONS
         ]
+        saved_eligibility = str(record.get("station_eligibility", "")) or "All stations"
+        station_eligibility = st.selectbox(
+            "Station eligibility",
+            STATION_ELIGIBILITY_OPTIONS,
+            index=STATION_ELIGIBILITY_OPTIONS.index(saved_eligibility)
+            if saved_eligibility in STATION_ELIGIBILITY_OPTIONS else 0,
+            help=(
+                "New this season only is for sprints scored by Unique stations. "
+                "Each DXer's first season-eligible reception of a station must fall during the sprint. "
+                "Earlier receptions from any saved location or entry method exclude that station. "
+                "Older logs uploaded later recalculate eligibility using their reception date."
+            ),
+        )
         scoring_method = st.selectbox(
             "Leaderboard scoring",
             [
@@ -291,6 +304,7 @@ elif section == "Challenges":
                     "min_distance": min_distance.strip(),
                     "max_distance": max_distance.strip(),
                     "scoring_method": scoring_method,
+                    "station_eligibility": station_eligibility,
                     "description": description,
                     "active": active,
                 }
@@ -309,7 +323,7 @@ elif section == "Challenges":
     if not challenges.empty:
         st.dataframe(
             challenges[
-                ["challenge_name", "challenge_type", "start_utc", "end_utc", "bands", "frequencies", "scoring_method", "active"]
+                ["challenge_name", "challenge_type", "start_utc", "end_utc", "bands", "frequencies", "station_eligibility", "scoring_method", "active"]
             ],
             hide_index=True,
         )

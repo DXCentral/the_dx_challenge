@@ -40,6 +40,11 @@ deployed changes. Times are always UTC.
   should use `propagation_modes`; the Admin page maintains compatibility automatically.
 - `scoring_method`: `Unique stations`, `Total logs`, `Unique states/provinces`,
   `Unique countries`, `Unique grids`, or `Unique counties`.
+- `station_eligibility`: `All stations` (the default for blank/missing values) or
+  `New this season only`. The latter is available for sprints with `Unique stations`
+  scoring. A DXer's first reception meeting the enabled season marathon criteria
+  must fall within the sprint window. All operating locations and entry methods
+  participate in this check. Older receptions uploaded later recalculate results.
 - `description`: Public explanation of the challenge.
 - `active`: `true` enables the row; `false` keeps it as a draft.
 
@@ -51,6 +56,15 @@ Enabled `marathon` rows define season-long eligibility. Home progress, Awards, a
 Season leaders count a reception only when it satisfies at least one enabled marathon's
 date window, band, frequency, geography, distance, propagation, and daypart rules.
 Changing a marathon in Admin recalculates those views without deleting historical logs.
+
+For an all-band new-stations sprint, choose **Admin → Challenges → Add new challenge**,
+set the type to **sprint**, select **MW, FM, NWR**, enter **ALL** for frequencies,
+set the UTC start/end, choose **New this season only** under **Station eligibility**,
+and use **Unique stations** leaderboard scoring. Leave the other restrictions blank
+for an unrestricted event, enable the challenge, and save. Repeat receptions remain
+available to the normal season log but score only once for the sprint. The app
+automatically adds the new field to the environment's Challenges Sheet; do not
+manually edit Sheet headers or change Secrets.
 
 ## `shoutouts_source.txt`
 

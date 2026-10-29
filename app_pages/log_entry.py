@@ -21,6 +21,8 @@ from dxcore.attribution import station_data_attribution
 from dxcore.content import (
     allowed_challenge_frequencies,
     logs_qualifying_for_challenges,
+    new_season_stations_only,
+    previously_heard_station_ids,
     station_qualifies_for_challenge,
 )
 from dxcore.geo import haversine_miles, latlon_to_grid
@@ -188,6 +190,11 @@ if entry_mode == "Bulk import":
     st.stop()
 
 active_sprints = active_challenges_for_band(band)
+new_station_season_history = (
+    season_eligible_logs(store.logs(user_id))
+    if any(new_season_stations_only(challenge) for challenge in active_sprints)
+    else None
+)
 frequencies = band_frequencies(band)
 challenge_filter = False
 focused_challenge: dict[str, object] | None = None
@@ -321,7 +328,7 @@ if entry_mode in {"Station list", "Station map"}:
     all_user_logs = store.logs(user_id)
     if challenge_filter and focused_challenge is not None:
         existing = logs_qualifying_for_challenges(
-            all_user_logs, [focused_challenge]
+            all_user_logs, [focused_challenge], season_logs=new_station_season_history
         )
         history_logged_label = "Logged in current challenge"
         history_unlogged_label = "Not logged in current challenge"
@@ -331,6 +338,19 @@ if entry_mode in {"Station list", "Station map"}:
             "Station-history highlights now include only your qualifying receptions "
             f"during {focused_challenge['name']}."
         )
+        if new_season_stations_only(focused_challenge):
+            earlier_station_ids = previously_heard_station_ids(
+                new_station_season_history, user_id, focused_challenge
+            )
+            earlier_targets = matches["station_id"].astype(str).isin(earlier_station_ids)
+            controls.caption(
+                f"New this season only: {int(earlier_targets.sum()):,} target(s) heard before "
+                "the sprint are excluded. New stations already logged in this sprint stay "
+                "visible and highlighted; each earns one point."
+            )
+            matches = matches[~earlier_targets].reset_index(drop=True)
+            history_logged_label = "New station logged in current challenge"
+            history_unlogged_label = "New seasonal target"
     else:
         existing = season_eligible_logs(all_user_logs)
         history_logged_label = "Previously logged"
@@ -968,6 +988,12 @@ eligible_sprints = [
     challenge
     for challenge in active_sprints
     if station_qualifies_for_challenge(selected, challenge)
+    and (
+        not new_season_stations_only(challenge)
+        or str(selected["station_id"]) not in previously_heard_station_ids(
+            new_station_season_history, user_id, challenge
+        )
+    )
 ]
 
 with review_target.container(border=True):
