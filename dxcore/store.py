@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import hashlib
 import sqlite3
 import uuid
@@ -166,6 +167,8 @@ class LocalStore:
                     max_distance TEXT NOT NULL,
                     scoring_method TEXT NOT NULL,
                     station_eligibility TEXT NOT NULL DEFAULT 'All stations',
+                    min_night_power_kw TEXT NOT NULL DEFAULT '',
+                    night_power_allowance_kw TEXT NOT NULL DEFAULT '0',
                     description TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 1,
                     created_utc TEXT NOT NULL,
@@ -308,6 +311,10 @@ class LocalStore:
                 connection.execute(
                     "ALTER TABLE challenges ADD COLUMN station_eligibility TEXT NOT NULL DEFAULT 'All stations'"
                 )
+            if "min_night_power_kw" not in existing_challenge_columns:
+                connection.execute("ALTER TABLE challenges ADD COLUMN min_night_power_kw TEXT NOT NULL DEFAULT ''")
+            if "night_power_allowance_kw" not in existing_challenge_columns:
+                connection.execute("ALTER TABLE challenges ADD COLUMN night_power_allowance_kw TEXT NOT NULL DEFAULT '0'")
             existing_ticket_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(support_tickets)").fetchall()
             }
@@ -1856,6 +1863,22 @@ class LocalStore:
             end = end.replace(tzinfo=timezone.utc)
         if end <= start:
             raise ValueError("Challenge end must be later than its start.")
+        min_night_power_kw = str(values.get("min_night_power_kw", "")).strip()
+        night_power_allowance_kw = str(values.get("night_power_allowance_kw", "")).strip() or "0"
+        allowance = float(night_power_allowance_kw)
+        if not math.isfinite(allowance) or allowance < 0:
+            raise ValueError("Nighttime power allowance must be a finite, nonnegative number in kW.")
+        if allowance and not min_night_power_kw:
+            raise ValueError("Set a minimum nighttime power before adding a power allowance.")
+        if min_night_power_kw:
+            minimum = float(min_night_power_kw)
+            if not math.isfinite(minimum) or minimum < 0:
+                raise ValueError("Minimum nighttime power must be a finite, nonnegative number in kW.")
+            if allowance > minimum:
+                raise ValueError("Nighttime power allowance cannot exceed the minimum nighttime power.")
+            bands = {item.strip().upper() for item in str(values.get("bands", "")).split("|") if item.strip()}
+            if str(values.get("challenge_type", "")).lower() != "sprint" or bands != {"MW"}:
+                raise ValueError("Nighttime power criteria require a sprint with MW as its only selected band.")
         station_eligibility = str(values.get("station_eligibility", "")).strip() or "All stations"
         if station_eligibility not in STATION_ELIGIBILITY_OPTIONS:
             raise ValueError("Choose a supported station eligibility rule.")
@@ -1876,6 +1899,8 @@ class LocalStore:
                     "challenge_id": challenge_id,
                     "challenge_name": name[:160],
                     "station_eligibility": station_eligibility,
+                    "min_night_power_kw": min_night_power_kw,
+                    "night_power_allowance_kw": night_power_allowance_kw,
                     "start_utc": iso_utc(start),
                     "end_utc": iso_utc(end),
                     "active": int(bool(values.get("active", True))),

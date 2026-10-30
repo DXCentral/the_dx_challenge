@@ -690,9 +690,14 @@ def render_challenge_dashboard(
         "station_country", "station_county", "station_grid", "distance_miles", "propagation",
         "is_sdr", "is_portable", "notes",
     ]
+    if "night_power_kw" in table:
+        safe_columns.append("night_power_kw")
     st.dataframe(
         display_log_table(table[safe_columns], st.session_state.user),
         hide_index=True,
-        column_config={"notes": st.column_config.TextColumn("Notes", width="large")},
+        column_config={
+            "notes": st.column_config.TextColumn("Notes", width="large"),
+            "night_power_kw": st.column_config.NumberColumn("Night power (kW)", format="%.3f"),
+        },
         key=f"{prefix}_receptions",
     )

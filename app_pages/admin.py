@@ -226,6 +226,28 @@ elif section == "Challenges":
         max_distance = distance_columns[1].text_input(
             "Maximum distance (miles)", value=str(record.get("max_distance", ""))
         )
+        min_night_power_kw = st.text_input(
+            "Minimum nighttime power (kW)",
+            value=str(record.get("min_night_power_kw", "")),
+            placeholder="Leave blank for unrestricted power; enter 20 for 20 kW or more",
+            help=(
+                "MW sprints only. Uses known nighttime transmitter power from the station database, "
+                "including the entered threshold. Stations with unknown nighttime power are excluded. "
+                "The allowance below can lower the qualifying cutoff. "
+                "This does not restrict reception time: choose Skywave / Nighttime below if catches "
+                "must also be made at night. No daytime-power substitution is used."
+            ),
+        )
+        night_power_allowance_kw = st.text_input(
+            "Nighttime power allowance (kW)",
+            value=str(record.get("night_power_allowance_kw", "")) or "0",
+            help=(
+                "Subtract this amount from the nighttime power baseline. "
+                "For example, a 20 kW baseline with a 1 kW allowance includes stations rated "
+                "19 kW or higher; 19.5 and 19.9999 qualify, while 18 does not. "
+                "Use 0 for an exact cutoff. Unknown power stays excluded."
+            ),
+        )
         propagation_modes = st.multiselect(
             "Propagation modes / MW dayparts",
             propagation_options,
@@ -303,6 +325,8 @@ elif section == "Challenges":
                     "dayparts": "|".join(dayparts),
                     "min_distance": min_distance.strip(),
                     "max_distance": max_distance.strip(),
+                    "min_night_power_kw": min_night_power_kw.strip(),
+                    "night_power_allowance_kw": night_power_allowance_kw.strip(),
                     "scoring_method": scoring_method,
                     "station_eligibility": station_eligibility,
                     "description": description,
@@ -323,7 +347,7 @@ elif section == "Challenges":
     if not challenges.empty:
         st.dataframe(
             challenges[
-                ["challenge_name", "challenge_type", "start_utc", "end_utc", "bands", "frequencies", "station_eligibility", "scoring_method", "active"]
+                ["challenge_name", "challenge_type", "start_utc", "end_utc", "bands", "frequencies", "min_night_power_kw", "night_power_allowance_kw", "station_eligibility", "scoring_method", "active"]
             ],
             hide_index=True,
         )

@@ -6,11 +6,12 @@ import streamlit as st
 from app_support import (
     challenge_status,
     display_names,
+    get_station_data,
     get_store,
     season_eligible_logs,
     season_marathons,
 )
-from dxcore.content import logs_qualifying_for_challenges, ordered_band_options
+from dxcore.content import has_night_power_rule, logs_qualifying_for_challenges, ordered_band_options
 from dxcore.metrics import add_geography_keys, canonical_daypart
 
 
@@ -168,9 +169,10 @@ else:
 st.subheader("Sprint challenge leaders")
 current, previous, _ = challenge_status()
 sprints = [item for item in current + previous if item["type"] == "sprint"]
+power_stations = get_station_data() if any(has_night_power_rule(item) for item in sprints) else None
 qualified_frames: list[pd.DataFrame] = []
 for challenge in sprints:
-    matches = logs_qualifying_for_challenges(all_logs, [challenge], season_logs=logs)
+    matches = logs_qualifying_for_challenges(all_logs, [challenge], season_logs=logs, stations=power_stations)
     if not matches.empty:
         matches["sprint_name"] = str(challenge["name"])
         matches["sprint_id"] = str(challenge["id"])
