@@ -1,3 +1,19 @@
+### Version 1.0.0-rc10.16.21 · Configurable nighttime-power allowance
+
+- Add Nighttime power allowance (kW) to Admin → Challenges. A 20 kW baseline and 1 kW allowance qualify known nighttime powers of 19 kW or higher, including 19.5 and 19.9999 kW.
+- Use the same inclusive effective cutoff in station targets, history, results, maps, and sprint leaderboards, without rounding stored power values.
+- Display the baseline, allowance, and qualifying cutoff in challenge details and the active challenge filter so participants can see the exact rule.
+- Default blank or missing allowances to zero so existing challenge thresholds remain unchanged. Extend each environment's Challenges Sheet and local cache automatically.
+
+### Version 1.0.0-rc10.16.20 · Nighttime-power sprint criteria
+
+- Add Minimum nighttime power (kW) to Admin → Challenges for MW sprints. Enter 20 to include stations rated for 20 kW or more at night; leave it blank for unrestricted power.
+- Preserve the domestic MW source's separate PWR_N field, converting watts to kW without substituting daytime power. Stations without known nighttime power do not qualify when this criterion is enabled.
+- Apply managed-database power consistently to active-challenge station-list/map targets, history, Challenge results, and sprint leaderboards, including historical and bulk-imported logs.
+- Show nighttime power in the MW Station list, Station map hover information, and power-restricted challenge reception tables.
+- Keep reception daypart independent: select Skywave / Nighttime separately when receptions must also be made at night. Ordinary season logging remains open.
+- Add the challenge setting to each environment's Challenges Sheet and local database automatically; existing challenges retain unrestricted power.
+
 ### Version 1.0.0-rc10.16.19 · New-this-season sprint challenges
 
 - Add Station eligibility to Admin → Challenges, with All stations as the existing default and New this season only for sprints scored by Unique stations.

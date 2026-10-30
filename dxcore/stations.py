@@ -39,6 +39,12 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
     frame["frequency"] = pd.to_numeric(frame["frequency"], errors="coerce")
     frame["latitude"] = pd.to_numeric(frame["latitude"], errors="coerce")
     frame["longitude"] = pd.to_numeric(frame["longitude"], errors="coerce")
+    frame["night_power_kw"] = pd.to_numeric(
+        frame.get("night_power_kw", pd.Series(index=frame.index, dtype=float)), errors="coerce"
+    )
+    frame["night_power_kw"] = frame["night_power_kw"].where(
+        np.isfinite(frame["night_power_kw"]) & frame["night_power_kw"].ge(0)
+    )
     frame = frame.dropna(subset=["frequency", "latitude", "longitude"])
     for column in [
         "call",
@@ -88,6 +94,7 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
             "station_notes",
             "rds_pi",
             "wfo",
+            "night_power_kw",
         ]
     ].drop_duplicates("station_id")
 
@@ -99,6 +106,8 @@ def load_stations() -> pd.DataFrame:
         {
             "band": "MW",
             "frequency": mw["FREQ"],
+            # Mesa Mike's PWR_N is watts, independently of daytime power.
+            "night_power_kw": pd.to_numeric(mw["PWR_N"], errors="coerce") / 1000.0,
             "call": mw["CALL"],
             "city": mw["CITY"],
             "region": mw["STATE"],

@@ -20,8 +20,10 @@ from app_support import (
 from dxcore.attribution import station_data_attribution
 from dxcore.content import (
     allowed_challenge_frequencies,
+    has_night_power_rule,
     logs_qualifying_for_challenges,
     new_season_stations_only,
+    night_power_rule_description,
     previously_heard_station_ids,
     station_qualifies_for_challenge,
 )
@@ -327,8 +329,14 @@ if entry_mode in {"Station list", "Station map"}:
         ].reset_index(drop=True)
     all_user_logs = store.logs(user_id)
     if challenge_filter and focused_challenge is not None:
+        if has_night_power_rule(focused_challenge):
+            controls.caption(
+                night_power_rule_description(focused_challenge)
+                + " Stations with unknown nighttime power are excluded."
+            )
         existing = logs_qualifying_for_challenges(
-            all_user_logs, [focused_challenge], season_logs=new_station_season_history
+            all_user_logs, [focused_challenge], season_logs=new_station_season_history,
+            stations=station_data,
         )
         history_logged_label = "Logged in current challenge"
         history_unlogged_label = "Not logged in current challenge"
@@ -370,6 +378,8 @@ if entry_mode in {"Station list", "Station map"}:
         controls.info(message + " You can also use Manual entry.")
         st.stop()
     matches = matches.copy()
+    if "night_power_kw" not in matches:
+        matches["night_power_kw"] = float("nan")
     station_filter_version = int(st.session_state.get(f"station_filter_version_{band}", 0))
     with controls.popover("Filter stations", icon=":material/filter_alt:"):
         general_filter = st.text_input(
@@ -477,7 +487,7 @@ if entry_mode in {"Station list", "Station map"}:
         if band == "FM":
             view_columns.append("rds_pi")
         if band == "MW":
-            view_columns.append("station_notes")
+            view_columns.extend(["station_notes", "night_power_kw"])
         if band == "NWR":
             view_columns.append("wfo")
         view_columns.extend(["county", "grid", "logged"])
@@ -500,7 +510,7 @@ if entry_mode in {"Station list", "Station map"}:
         if band == "FM":
             ordered_columns.append("rds_pi")
         if band == "MW":
-            ordered_columns.append("station_notes")
+            ordered_columns.extend(["station_notes", "night_power_kw"])
         if band == "NWR":
             ordered_columns.append("wfo")
         ordered_columns.extend(
@@ -517,6 +527,7 @@ if entry_mode in {"Station list", "Station map"}:
                 "format": "Format",
                 "network_slogan": slogan_column_label,
                 "station_notes": "FM //s / notes",
+                "night_power_kw": "Night power (kW)",
                 "rds_pi": "RDS PI code",
                 "wfo": "Weather Forecast Office (WFO)",
                 "county": "County / parish",
@@ -562,6 +573,9 @@ if entry_mode in {"Station list", "Station map"}:
             station_column_config["RDS PI code"] = st.column_config.TextColumn(width="small")
         if band == "MW":
             station_column_config["FM //s / notes"] = st.column_config.TextColumn(width="large")
+            station_column_config["Night power (kW)"] = st.column_config.NumberColumn(
+                format="%.3f", help="Known nighttime transmitter power in kilowatts. Blank means unknown."
+            )
         if band == "NWR":
             station_column_config["Weather Forecast Office (WFO)"] = st.column_config.TextColumn(width="medium")
         event = st.dataframe(
@@ -669,7 +683,10 @@ if entry_mode in {"Station list", "Station map"}:
         if band == "FM":
             tooltip_html += "<br/><b>RDS PI code:</b> {rds_pi}"
         if band == "MW":
-            tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}"
+            map_matches["night_power_label"] = map_matches["night_power_kw"].map(
+                lambda value: f"{float(value):g} kW" if pd.notna(value) else "Unknown"
+            )
+            tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}<br/><b>Night power:</b> {night_power_label}"
         elif band == "NWR":
             tooltip_html += "<br/><b>Weather Forecast Office:</b> {wfo}"
         controls.caption(station_data_attribution(band))

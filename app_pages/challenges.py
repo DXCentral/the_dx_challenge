@@ -3,8 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app_support import challenge_status, display_names, get_store, season_eligible_logs
-from dxcore.content import logs_qualifying_for_challenges, new_season_stations_only
+from app_support import challenge_status, display_names, get_station_data, get_store, season_eligible_logs
+from dxcore.content import has_night_power_rule, logs_qualifying_for_challenges, new_season_stations_only, night_power_rule_description
 from modules.challenge_dashboard import render_challenge_dashboard
 
 
@@ -12,6 +12,7 @@ def challenge_logs(challenge: dict[str, object], logs: pd.DataFrame) -> pd.DataF
     return logs_qualifying_for_challenges(
         logs, [challenge],
         season_logs=season_eligible_logs(logs) if new_season_stations_only(challenge) else None,
+        stations=get_station_data() if has_night_power_rule(challenge) else None,
     )
 
 
@@ -100,6 +101,11 @@ if selected is not None:
         )
         if selected.get("description"):
             st.write(selected["description"])
+        if has_night_power_rule(selected):
+            st.info(
+                night_power_rule_description(selected)
+                + " Unknown nighttime power is excluded. Reception daypart follows the separately configured challenge rules."
+            )
         if new_season_stations_only(selected):
             st.info(
                 "New this season only: each station scores once per DXer across the selected bands. "

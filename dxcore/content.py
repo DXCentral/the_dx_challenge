@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import math
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -14,6 +15,40 @@ CHALLENGE_FILE = CONTENT_DIR / "challenge_schedule.csv"
 ANNOUNCEMENT_FILE = CONTENT_DIR / "announcements.csv"
 SUPPORTED_BANDS = ("MW", "FM", "NWR")
 STATION_ELIGIBILITY_OPTIONS = ("All stations", "New this season only")
+
+
+def has_night_power_rule(challenge: dict[str, object]) -> bool:
+    return challenge.get("rules", {}).get("min_night_power_kw") is not None
+
+
+def night_power_cutoff_kw(challenge: dict[str, object]) -> float:
+    rules = challenge["rules"]
+    return max(0.0, float(rules["min_night_power_kw"]) - float(rules.get("night_power_allowance_kw", 0) or 0))
+
+
+def night_power_rule_description(challenge: dict[str, object]) -> str:
+    rules = challenge["rules"]
+    allowance = float(rules.get("night_power_allowance_kw", 0) or 0)
+    if allowance:
+        return (
+            f"Nighttime power baseline: {rules['min_night_power_kw']:g} kW; "
+            f"allowance: {allowance:g} kW; "
+            f"qualifying cutoff: {night_power_cutoff_kw(challenge):g} kW or higher."
+        )
+    return f"Minimum nighttime transmitter power: {night_power_cutoff_kw(challenge):g} kW."
+
+
+def reception_night_power(logs: pd.DataFrame, stations: pd.DataFrame | None) -> pd.Series:
+    """Resolve power from the managed station database, never from upload claims."""
+    if (
+        stations is None
+        or not {"station_id", "band", "night_power_kw"}.issubset(stations.columns)
+        or "station_id" not in logs
+    ):
+        return pd.Series(float("nan"), index=logs.index, dtype=float)
+    mw = stations[stations["band"].astype(str).str.upper().eq("MW")].drop_duplicates("station_id", keep="last")
+    powers = pd.to_numeric(mw.set_index("station_id")["night_power_kw"], errors="coerce")
+    return pd.to_numeric(logs["station_id"].map(powers), errors="coerce")
 
 
 def new_season_stations_only(challenge: dict[str, object]) -> bool:
@@ -203,6 +238,9 @@ def challenges_from_frame(frame: pd.DataFrame) -> list[dict[str, object]]:
             "description": _text(row.get("description")),
             "rules": {
                 "station_eligibility": _text(row.get("station_eligibility")) or "All stations",
+                "min_night_power_kw": float(_text(row.get("min_night_power_kw")))
+                if _text(row.get("min_night_power_kw")) else None,
+                "night_power_allowance_kw": float(_text(row.get("night_power_allowance_kw")) or 0),
                 "frequencies": frequencies,
                 "include_countries": _items(row.get("include_countries", "")),
                 "exclude_countries": _items(row.get("exclude_countries", "")),
@@ -243,6 +281,14 @@ def station_qualifies_for_challenge(
     if str(value.get("band", "")).upper() not in challenge["bands"]:
         return False
     rules = challenge["rules"]
+    if has_night_power_rule(challenge):
+        power = pd.to_numeric(value.get("night_power_kw"), errors="coerce")
+        if (
+            str(value.get("band", "")).upper() != "MW"
+            or pd.isna(power) or not math.isfinite(float(power))
+            or float(power) < 0 or float(power) < night_power_cutoff_kw(challenge)
+        ):
+            return False
     if not frequency_allowed(rules.get("frequencies", "ALL"), float(value.get("frequency", 0))):
         return False
     country = _text(value.get("country", value.get("station_country", ""))).casefold()
@@ -272,6 +318,7 @@ def station_qualifies_for_challenge(
 def log_qualifies(
     log: pd.Series | dict[str, object], challenge: dict[str, object],
     *, season_logs: pd.DataFrame | None = None,
+    stations: pd.DataFrame | None = None,
 ) -> bool:
     value = dict(log)
     station_view = {
@@ -281,6 +328,8 @@ def log_qualifies(
         "region": value.get("station_region", ""),
         "distance_miles": value.get("distance_miles", ""),
     }
+    if has_night_power_rule(challenge):
+        station_view["night_power_kw"] = reception_night_power(pd.DataFrame([value]), stations).iloc[0]
     if not station_qualifies_for_challenge(station_view, challenge):
         return False
     reception_value = pd.to_datetime(
@@ -314,12 +363,20 @@ def log_qualifies(
 def challenge_log_mask(
     logs: pd.DataFrame, challenge: dict[str, object],
     *, season_logs: pd.DataFrame | None = None,
+    stations: pd.DataFrame | None = None,
 ) -> pd.Series:
     """Vectorized equivalent of ``log_qualifies`` for leaderboard-sized data."""
     if logs.empty:
         return pd.Series(False, index=logs.index, dtype=bool)
     mask = logs["band"].fillna("").astype(str).str.upper().isin(challenge["bands"])
     rules = challenge["rules"]
+    if has_night_power_rule(challenge):
+        power = reception_night_power(logs, stations)
+        mask &= (
+            logs["band"].fillna("").astype(str).str.upper().eq("MW")
+            & power.ge(night_power_cutoff_kw(challenge))
+            & power.ge(0) & power.lt(float("inf"))
+        )
 
     frequencies = pd.to_numeric(logs["frequency"], errors="coerce")
     specification = rules.get("frequencies", "ALL")
@@ -377,14 +434,18 @@ def challenge_log_mask(
 def logs_qualifying_for_challenges(
     logs: pd.DataFrame, challenges: list[dict[str, object]],
     *, season_logs: pd.DataFrame | None = None,
+    stations: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Return each reception once when it qualifies for at least one challenge."""
     if logs.empty or not challenges:
         return logs.iloc[0:0].copy()
     eligible = pd.Series(False, index=logs.index, dtype=bool)
     for challenge in challenges:
-        eligible |= challenge_log_mask(logs, challenge, season_logs=season_logs)
-    return logs[eligible].copy()
+        eligible |= challenge_log_mask(logs, challenge, season_logs=season_logs, stations=stations)
+    result = logs[eligible].copy()
+    if any(has_night_power_rule(challenge) for challenge in challenges):
+        result["night_power_kw"] = reception_night_power(result, stations)
+    return result
 
 
 def validate_season_submission(
@@ -392,6 +453,7 @@ def validate_season_submission(
     challenges: list[dict[str, object]],
     now: datetime | None = None,
     *, season_logs: pd.DataFrame | None = None,
+    stations: pd.DataFrame | None = None,
 ) -> tuple[bool, str, list[str]]:
     """Validate one submitted reception and identify any sprint memberships.
 
@@ -416,7 +478,7 @@ def validate_season_submission(
             [],
         )
     qualifying_marathons = [
-        item for item in marathons if log_qualifies(value, item)
+        item for item in marathons if log_qualifies(value, item, stations=stations)
     ]
     if not qualifying_marathons:
         band = _text(value.get("band")).upper() or "selected"
@@ -432,7 +494,7 @@ def validate_season_submission(
     sprint_names = [
         str(item["name"])
         for item in challenges
-        if item.get("type") == "sprint" and log_qualifies(value, item, season_logs=sprint_history)
+        if item.get("type") == "sprint" and log_qualifies(value, item, season_logs=sprint_history, stations=stations)
     ]
     return True, "Reception is eligible for Season 7.", sprint_names
 

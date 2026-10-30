@@ -33,6 +33,18 @@ deployed changes. Times are always UTC.
 - `include_regions` and `exclude_regions`: Optional state/province allow- and
   block-lists separated with `|`.
 - `min_distance` and `max_distance`: Optional inclusive distance limits in miles.
+- `min_night_power_kw`: Optional inclusive nighttime transmitter-power minimum in
+  kilowatts for MW-only sprints. Enter `20` for at least 20 kW. Leave blank to
+  ignore power. The domestic source's PWR_N is converted from watts; daytime
+  power is never substituted. Unknown nighttime power is excluded when enabled.
+  This field does not restrict reception time; select `Skywave / Nighttime` in
+  propagation/daypart settings separately if required. Other station lists may
+  lack nighttime power, so their records remain unknown until power is supplied.
+- `night_power_allowance_kw`: Optional allowance subtracted from the nighttime
+  baseline, defaulting to `0`. With a `20` baseline and `1` allowance, the inclusive
+  qualifying cutoff is `19` kW. Use `0.5` for a `19.5` kW cutoff instead. The
+  allowance cannot be negative or exceed the baseline, and requires a power
+  baseline when nonzero. Unknown nighttime power stays excluded.
 - `propagation_modes`: Optional modes separated with `|`. Supported MW values are
   `Groundwave / Daytime`, `Sunrise grayline`, `Sunset grayline`, and
   `Skywave / Nighttime`; FM/NWR propagation modes may be mixed into the same field.
@@ -65,6 +77,14 @@ for an unrestricted event, enable the challenge, and save. Repeat receptions rem
 available to the normal season log but score only once for the sprint. The app
 automatically adds the new field to the environment's Challenges Sheet; do not
 manually edit Sheet headers or change Secrets.
+
+For a Blowtorch sprint, select **MW** only, enter **ALL** for frequencies and **20**
+for **Minimum nighttime power (kW)**, and choose the UTC window and leaderboard
+scoring. To include stations within 1 kW below that baseline, enter **1** for
+**Nighttime power allowance (kW)**; the effective cutoff becomes **19 kW**.
+Leave **Station eligibility** at **All stations** unless the event also
+requires new seasonal stations. Set **Skywave / Nighttime** only if the receptions
+themselves must occur at night; leaving propagation/daypart blank allows any daypart.
 
 ## `shoutouts_source.txt`
 
