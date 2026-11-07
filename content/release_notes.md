@@ -1,3 +1,16 @@
+### Version 1.0.0-rc10.16.23 · All frequencies for challenge targets
+
+- Choose All frequencies in Station list while the active challenge filter is on to browse qualifying stations across the selected band in one list.
+
+### Version 1.0.0-rc10.16.22 · November MW station and power refresh
+
+- Reconcile the November 5 Mesa Mike and Tim Tromp US/Canada exports, including current identification details, licensed day/night power, and 151 additional current or archival listings.
+- Preserve all existing station IDs, source notes and identification metadata. Retain admin corrections and reversible removals; verified call changes keep existing log/history links.
+- Retain missing and explicitly silent/deleted stations for earlier recordings. Show station status and separate day/night power on the MW Station list and map hover.
+- Load Canadian daytime and nighttime powers from Tim Tromp, with watts converted to kilowatts independently. Existing nighttime-power sprint criteria now include known Canadian powers.
+- Prefer Mesa Mike engineering values when sources disagree; use Tim Tromp to fill missing powers and retain source attribution. Unknown nighttime power remains unknown and cannot qualify for a power-restricted sprint.
+- Match archival coordinates by frequency and location when calls have been reused elsewhere. Keep non-US/Canadian station data unchanged.
+
 ### Version 1.0.0-rc10.16.21 · Configurable nighttime-power allowance
 
 - Add Nighttime power allowance (kW) to Admin → Challenges. A 20 kW baseline and 1 kW allowance qualify known nighttime powers of 19 kW or higher, including 19.5 and 19.9999 kW.

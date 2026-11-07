@@ -126,9 +126,10 @@ def get_station_data() -> pd.DataFrame:
         ]
         overrides = overrides[columns].copy()
         # Station-identification/location edits must retain source power data.
-        overrides["night_power_kw"] = overrides["station_id"].map(
-            base.set_index("station_id").get("night_power_kw", pd.Series(dtype=float))
-        )
+        for column in ["day_power_kw", "night_power_kw", "station_status", "day_power_source", "night_power_source"]:
+            overrides[column] = overrides["station_id"].map(
+                base.set_index("station_id").get(column, pd.Series(dtype=object))
+            )
         metadata_columns = [
             "format",
             "network_slogan",
