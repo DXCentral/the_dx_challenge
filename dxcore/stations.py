@@ -39,12 +39,13 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
     frame["frequency"] = pd.to_numeric(frame["frequency"], errors="coerce")
     frame["latitude"] = pd.to_numeric(frame["latitude"], errors="coerce")
     frame["longitude"] = pd.to_numeric(frame["longitude"], errors="coerce")
-    frame["night_power_kw"] = pd.to_numeric(
-        frame.get("night_power_kw", pd.Series(index=frame.index, dtype=float)), errors="coerce"
-    )
-    frame["night_power_kw"] = frame["night_power_kw"].where(
-        np.isfinite(frame["night_power_kw"]) & frame["night_power_kw"].ge(0)
-    )
+    for column in ["day_power_kw", "night_power_kw"]:
+        frame[column] = pd.to_numeric(
+            frame.get(column, pd.Series(index=frame.index, dtype=float)), errors="coerce"
+        )
+        frame[column] = frame[column].where(
+            np.isfinite(frame[column]) & frame[column].ge(0)
+        )
     frame = frame.dropna(subset=["frequency", "latitude", "longitude"])
     for column in [
         "call",
@@ -57,6 +58,9 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
         "station_notes",
         "rds_pi",
         "wfo",
+        "station_status",
+        "day_power_source",
+        "night_power_source",
     ]:
         if column not in frame:
             frame[column] = ""
@@ -64,7 +68,7 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
     frame["grid"] = [
         latlon_to_grid(lat, lon) for lat, lon in zip(frame["latitude"], frame["longitude"], strict=False)
     ]
-    frame["station_id"] = [
+    generated_ids = [
         _station_id(band, freq, call, city, region, country)
         for band, freq, call, city, region, country in zip(
             frame["band"],
@@ -76,6 +80,9 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
             strict=False,
         )
     ]
+    # A refreshed call/location must keep its existing log/override/removal links.
+    stored_ids = frame.get("source_station_id", pd.Series("", index=frame.index)).map(_text)
+    frame["station_id"] = stored_ids.where(stored_ids.ne(""), generated_ids)
     return frame[
         [
             "station_id",
@@ -95,6 +102,10 @@ def _finalize(frame: pd.DataFrame) -> pd.DataFrame:
             "rds_pi",
             "wfo",
             "night_power_kw",
+            "day_power_kw",
+            "station_status",
+            "day_power_source",
+            "night_power_source",
         ]
     ].drop_duplicates("station_id")
 
@@ -106,8 +117,13 @@ def load_stations() -> pd.DataFrame:
         {
             "band": "MW",
             "frequency": mw["FREQ"],
+            "source_station_id": mw.get("Station ID", ""),
             # Mesa Mike's PWR_N is watts, independently of daytime power.
+            "day_power_kw": pd.to_numeric(mw["PWR_D"], errors="coerce") / 1000.0,
             "night_power_kw": pd.to_numeric(mw["PWR_N"], errors="coerce") / 1000.0,
+            "station_status": mw.get("Station Status", ""),
+            "day_power_source": mw.get("Day Power Source", ""),
+            "night_power_source": mw.get("Night Power Source", ""),
             "call": mw["CALL"],
             "city": mw["CITY"],
             "region": mw["STATE"],
@@ -128,6 +144,18 @@ def load_stations() -> pd.DataFrame:
         {
             "band": "MW",
             "frequency": international["Frequency"],
+            "source_station_id": international.get("Station ID", ""),
+            "day_power_kw": pd.to_numeric(
+                international.get("Day Power W", pd.Series(index=international.index, dtype=float)),
+                errors="coerce",
+            ) / 1000.0,
+            "night_power_kw": pd.to_numeric(
+                international.get("Night Power W", pd.Series(index=international.index, dtype=float)),
+                errors="coerce",
+            ) / 1000.0,
+            "station_status": international.get("Station Status", ""),
+            "day_power_source": international.get("Day Power Source", ""),
+            "night_power_source": international.get("Night Power Source", ""),
             "call": international["Station Call Letters"],
             "city": international["Station City"],
             "region": international["Station State/Province"],
@@ -294,6 +322,7 @@ STATION_SEARCH_COLUMNS = (
     "station_notes",
     "rds_pi",
     "wfo",
+    "station_status",
 )
 
 

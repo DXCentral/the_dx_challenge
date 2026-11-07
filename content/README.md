@@ -86,6 +86,27 @@ Leave **Station eligibility** at **All stations** unless the event also
 requires new seasonal stations. Set **Skywave / Nighttime** only if the receptions
 themselves must occur at night; leaving propagation/daypart blank allows any daypart.
 
+## MW station data refreshes
+
+The November 5, 2026 refresh retains existing `Station ID` values in both MW CSVs.
+Keep these IDs intact when editing calls or locations: reception history, admin
+corrections and reversible removals use them. New rows without a stored ID still
+receive an automatically generated ID.
+
+Domestic `PWR_D` / `PWR_N` and international `Day Power W` / `Night Power W` are
+watts. The loader converts each field independently to kW. Source attribution is
+retained in `Day Power Source` / `Night Power Source`; domestic comparison columns
+retain the separate Mesa and Tim values. Prefer Mesa engineering values where
+known, then Tim values for missing data. Blank nighttime power stays unknown.
+
+`Station Status` distinguishes Silent from Listed. Listed means present in the
+refreshed sources, not an independent verification that the transmitter is on air.
+Silent stations remain available for earlier recordings; ordinary season and
+challenge UTC restrictions continue to apply. Existing identification metadata
+and notes are preserved alongside refreshed information; managed admin edits
+remain authoritative. Do not replace the environment's Station Overrides or
+Station Removals Sheets when deploying refreshed source files.
+
 ## `shoutouts_source.txt`
 
 Store the single published-to-web CSV URL for the WPForms shoutout response Sheet.

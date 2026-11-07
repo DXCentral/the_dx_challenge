@@ -234,21 +234,23 @@ challenge_identity = ""
 if challenge_filter and focused_challenge is not None:
     challenge_frequencies = allowed_challenge_frequencies(focused_challenge, frequencies)
     challenge_identity = str(focused_challenge.get("id", focused_challenge.get("name", "")))
+tuning_frequencies = challenge_frequencies or frequencies
 frequency_options: list[float | str] = (
-    challenge_frequencies
-    if challenge_filter and challenge_frequencies
-    else (["All", *frequencies] if entry_mode == "Station list" else frequencies)
+    ["All", *tuning_frequencies] if entry_mode == "Station list" else tuning_frequencies
 )
 st.session_state.setdefault(frequency_key, frequencies[0])
 challenge_focus_key = f"log_challenge_frequency_focus_{band}"
-if challenge_filter and challenge_frequencies:
-    if st.session_state.get(challenge_focus_key) != challenge_identity:
+if challenge_frequencies:
+    if (
+        st.session_state.get(challenge_focus_key) != challenge_identity
+        and st.session_state[frequency_key] != "All"
+    ):
         st.session_state[frequency_key] = challenge_frequencies[0]
     st.session_state[challenge_focus_key] = challenge_identity
 else:
     st.session_state.pop(challenge_focus_key, None)
-    if st.session_state[frequency_key] not in frequency_options:
-        st.session_state[frequency_key] = frequencies[0]
+if st.session_state[frequency_key] not in frequency_options:
+    st.session_state[frequency_key] = tuning_frequencies[0]
 
 if challenge_filter and not challenge_frequencies:
     controls.warning(
@@ -372,14 +374,19 @@ if entry_mode in {"Station list", "Station map"}:
     }
     heard_ids = set(history_summary.index)
     if matches.empty:
-        message = "No stations match this frequency and distance range."
+        scope = "these frequencies" if frequency == "All" else "this frequency"
+        message = f"No stations match {scope} and the distance range."
         if challenge_filter:
-            message = "No listed stations on this frequency meet the active challenge filter. Turn it off to restore the full list."
+            message = f"No listed stations on {scope} meet the active challenge filter. Turn it off to restore the full list."
         controls.info(message + " You can also use Manual entry.")
         st.stop()
     matches = matches.copy()
-    if "night_power_kw" not in matches:
-        matches["night_power_kw"] = float("nan")
+    for column in ["day_power_kw", "night_power_kw"]:
+        if column not in matches:
+            matches[column] = float("nan")
+    for column in ["station_status", "day_power_source", "night_power_source"]:
+        if column not in matches:
+            matches[column] = ""
     station_filter_version = int(st.session_state.get(f"station_filter_version_{band}", 0))
     with controls.popover("Filter stations", icon=":material/filter_alt:"):
         general_filter = st.text_input(
@@ -487,7 +494,7 @@ if entry_mode in {"Station list", "Station map"}:
         if band == "FM":
             view_columns.append("rds_pi")
         if band == "MW":
-            view_columns.extend(["station_notes", "night_power_kw"])
+            view_columns.extend(["station_notes", "station_status", "day_power_kw", "night_power_kw"])
         if band == "NWR":
             view_columns.append("wfo")
         view_columns.extend(["county", "grid", "logged"])
@@ -510,7 +517,7 @@ if entry_mode in {"Station list", "Station map"}:
         if band == "FM":
             ordered_columns.append("rds_pi")
         if band == "MW":
-            ordered_columns.extend(["station_notes", "night_power_kw"])
+            ordered_columns.extend(["station_notes", "station_status", "day_power_kw", "night_power_kw"])
         if band == "NWR":
             ordered_columns.append("wfo")
         ordered_columns.extend(
@@ -528,6 +535,8 @@ if entry_mode in {"Station list", "Station map"}:
                 "network_slogan": slogan_column_label,
                 "station_notes": "FM //s / notes",
                 "night_power_kw": "Night power (kW)",
+                "day_power_kw": "Day power (kW)",
+                "station_status": "Station status",
                 "rds_pi": "RDS PI code",
                 "wfo": "Weather Forecast Office (WFO)",
                 "county": "County / parish",
@@ -573,8 +582,14 @@ if entry_mode in {"Station list", "Station map"}:
             station_column_config["RDS PI code"] = st.column_config.TextColumn(width="small")
         if band == "MW":
             station_column_config["FM //s / notes"] = st.column_config.TextColumn(width="large")
+            station_column_config["Day power (kW)"] = st.column_config.NumberColumn(
+                format="%.3f", help="Known daytime transmitter power in kilowatts. Blank means unknown."
+            )
             station_column_config["Night power (kW)"] = st.column_config.NumberColumn(
                 format="%.3f", help="Known nighttime transmitter power in kilowatts. Blank means unknown."
+            )
+            station_column_config["Station status"] = st.column_config.TextColumn(
+                help="Silent listings remain available for earlier recordings. Listed means present in the refreshed sources."
             )
         if band == "NWR":
             station_column_config["Weather Forecast Office (WFO)"] = st.column_config.TextColumn(width="medium")
@@ -642,6 +657,9 @@ if entry_mode in {"Station list", "Station map"}:
             "station_notes",
             "rds_pi",
             "wfo",
+            "station_status",
+            "day_power_source",
+            "night_power_source",
         ]:
             map_matches[column] = map_matches[column].map(map_text)
         if band == "NWR":
@@ -683,10 +701,20 @@ if entry_mode in {"Station list", "Station map"}:
         if band == "FM":
             tooltip_html += "<br/><b>RDS PI code:</b> {rds_pi}"
         if band == "MW":
+            map_matches["day_power_label"] = map_matches["day_power_kw"].map(
+                lambda value: f"{float(value):g} kW" if pd.notna(value) else "Unknown"
+            )
             map_matches["night_power_label"] = map_matches["night_power_kw"].map(
                 lambda value: f"{float(value):g} kW" if pd.notna(value) else "Unknown"
             )
-            tooltip_html += "<br/><b>FM //s / notes:</b> {station_notes}<br/><b>Night power:</b> {night_power_label}"
+            tooltip_html += (
+                "<br/><b>FM //s / notes:</b> {station_notes}"
+                "<br/><b>Station status:</b> {station_status}"
+                "<br/><b>Day power:</b> {day_power_label}"
+                "<br/><b>Night power:</b> {night_power_label}"
+                "<br/><b>Day power source:</b> {day_power_source}"
+                "<br/><b>Night power source:</b> {night_power_source}"
+            )
         elif band == "NWR":
             tooltip_html += "<br/><b>Weather Forecast Office:</b> {wfo}"
         controls.caption(station_data_attribution(band))
