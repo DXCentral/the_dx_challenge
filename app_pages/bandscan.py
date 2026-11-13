@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from app_support import get_store, require_location, season_eligible_logs
-from dxcore.bandscan import reception_history
-from dxcore.presentation import distance_is_km, format_reception
+from dxcore.bandscan import GRAVEYARD_FREQUENCIES, frequency_statistics, reception_history
+from dxcore.presentation import convert_distance, distance_is_km, format_reception
 from dxcore.stations import frequencies_for_band
+from dxcore.themes import THEMES
 
 
 COLORS = {
@@ -155,6 +157,102 @@ for start in range(0, len(frequencies), 7):
         token = str(key).replace(".", "_")
         if column.button(label, key=f"scan_{band}_{token}", width="stretch"):
             st.session_state[f"scan_active_frequency_{band}"] = key
+
+st.subheader("Frequency stats")
+st.caption(
+    "Your current-season receptions at the selected QTH, across all logged frequencies "
+    f"on {band}. Unique logs count each station once per frequency. "
+    "Receptions include repeat catches; maximum distance uses every reception."
+)
+analysis_options = [
+    "Top 10 frequencies by unique logs",
+    "Top 10 frequencies by maximum distance",
+    "All frequency statistics",
+]
+if band == "MW":
+    analysis_options.insert(1, "Graveyard channels by unique logs")
+analysis = st.selectbox(
+    "Frequency analysis", analysis_options,
+    key=f"scan_frequency_analysis_{band}", persist_state="session",
+)
+statistics = frequency_statistics(history)
+if statistics.empty:
+    st.info("Submit receptions from this QTH to build your frequency stats.")
+else:
+    distance_column = "Max distance (km)" if distance_is_km(preferences) else "Max distance (mi)"
+    if analysis == "Graveyard channels by unique logs":
+        statistics = statistics.set_index("frequency").reindex(GRAVEYARD_FREQUENCIES).reset_index()
+        statistics[["unique_stations", "receptions"]] = (
+            statistics[["unique_stations", "receptions"]].fillna(0).astype(int)
+        )
+        statistics = statistics.sort_values(
+            ["unique_stations", "frequency"], ascending=[False, True]
+        )
+    elif analysis == "Top 10 frequencies by maximum distance":
+        statistics = statistics.dropna(subset=["max_distance_miles"]).sort_values(
+            ["max_distance_miles", "frequency"], ascending=[False, True]
+        ).head(10)
+    elif analysis == "Top 10 frequencies by unique logs":
+        statistics = statistics.sort_values(
+            ["unique_stations", "frequency"], ascending=[False, True]
+        ).head(10)
+    else:
+        statistics = statistics.sort_values("frequency")
+
+    if statistics.empty:
+        st.info("No known reception distances are available for this view yet.")
+    else:
+        view = statistics.rename(columns={
+            "unique_stations": "Unique logs", "receptions": "Receptions",
+            "farthest_call": "Farthest station", "farthest_location": "Station location",
+        }).copy()
+        view["Frequency"] = view["frequency"].map(lambda value: frequency_label(band, value))
+        view[distance_column] = view["max_distance_miles"].map(
+            lambda value: convert_distance(value, preferences)
+        )
+        view[["Farthest station", "Station location"]] = (
+            view[["Farthest station", "Station location"]].fillna("")
+        )
+        view = view[[
+            "Frequency", "Unique logs", "Receptions", distance_column,
+            "Farthest station", "Station location",
+        ]]
+        metric = distance_column if analysis == "Top 10 frequencies by maximum distance" else "Unique logs"
+        chart_data = view
+        if analysis == "All frequency statistics":
+            chart_data = view.sort_values("Unique logs", ascending=False, kind="stable").head(10)
+        palette = THEMES.get(str(preferences.get("theme_name")), THEMES["Midnight blue"])
+        chart = (
+            alt.Chart(chart_data)
+            .mark_bar(size=18, cornerRadiusEnd=3, color=palette["primary"])
+            .encode(
+                x=alt.X(f"{metric}:Q", title=metric),
+                y=alt.Y("Frequency:N", sort=chart_data["Frequency"].tolist(), title=None),
+                tooltip=[
+                    alt.Tooltip("Frequency:N"), alt.Tooltip("Unique logs:Q", format=",d"),
+                    alt.Tooltip("Receptions:Q", format=",d"),
+                    alt.Tooltip(f"{distance_column}:Q", format=",.1f"),
+                    alt.Tooltip("Farthest station:N"), alt.Tooltip("Station location:N"),
+                ],
+            )
+            .properties(height=max(120, len(chart_data) * 28), background=palette["background"])
+            .configure_axis(labelColor=palette["text"], titleColor=palette["text"], gridColor=palette["border"])
+            .configure_view(strokeWidth=0)
+        )
+        chart_column, table_column = st.columns([1, 1.5], gap="medium", wrap=True)
+        with chart_column:
+            st.altair_chart(chart, width="stretch")
+        with table_column:
+            st.dataframe(
+                view, hide_index=True, width="stretch",
+                column_config={
+                    "Unique logs": st.column_config.ProgressColumn(
+                        min_value=0, max_value=max(1, int(view["Unique logs"].max())), format="%d",
+                    ),
+                    "Receptions": st.column_config.NumberColumn(format="%d"),
+                    distance_column: st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
 
 active_frequency = st.session_state.get(f"scan_active_frequency_{band}")
 if active_frequency not in frequency_keys:
