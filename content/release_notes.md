@@ -1,3 +1,9 @@
+### Version 1.0.0-rc10.16.24 · Bandscan frequency stats
+
+- Add a Frequency analysis selector below the matrix for top frequencies by unique logs, MW graveyard channels, longest catches, and a full frequency summary.
+- Show compact horizontal charts and tables with unique station counts, total receptions, maximum distance, and the farthest station and location.
+- Scope analysis to the current season, selected band, and selected QTH across its logged frequencies. Use profile distance units and theme colors.
+
 ### Version 1.0.0-rc10.16.23 · All frequencies for challenge targets
 
 - Choose All frequencies in Station list while the active challenge filter is on to browse qualifying stations across the selected band in one list.
